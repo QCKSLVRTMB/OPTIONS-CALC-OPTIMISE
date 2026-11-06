@@ -1,14 +1,19 @@
 """Вкладка «Vol Analysis» — метрики волатильности по книге Коннолли.
 
 Изолированный файл: не трогает board.py, alert_card.py, styles.py.
-Читает st.session_state.positions (с вкладки «Позиция») и, где нужно,
-fetch_optionboard (только чтение).
+Работает с базовым активом и категорией из вкладки «Позиция»
+(аналогично Heatmap IV / IV Rank / Skew).
+
+Источники параметров:
+  • актив/категория      — st.session_state['pos_asset'], ['pos_category']
+  • серия по умолчанию   — st.session_state['pos_series_code']
+  • IV                   — поле volatility на доске опционов (или ручное)
+  • ставка, дивиденды    — core.strategies._compute_r_q_for_leg
+                            (G-кривая ОФЗ + SmartLab; или ручное)
 """
-import math
 from datetime import date, datetime
 
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -21,7 +26,8 @@ from core.volatility import (
     aggregate_portfolio_greeks,
 )
 from core.pricing import _get_current_market_price_for_asset
-from core.options import fetch_optionboard
+from core.options import fetch_optionboard, fetch_optionseries
+from core.market_data import format_series_label
 from core.strategies import _compute_r_q_for_leg
 
 
@@ -33,25 +39,196 @@ def _render_vol_analysis_tab():
         "Прибыль — от Γ-рехеджа, не от направления цены."
     )
 
-    with st.expander("ℹ️ Что показывает вкладка", expanded=False):
-        st.markdown(
-            "**Снимок портфеля** — Γ, Θ, V, break-even daily move, "
-            "длинная/короткая позиция по vol (гл. 4.3, 4.7, 5.2).\n\n"
-            "**Карта дельты** (гл. 4.9): линии Δ во времени. "
-            "Пересечение = сигнал к рехеджу.\n\n"
-            "**Best / Worst case** (гл. 4.13, 5.6): предельные "
-            "профили P&L для buy-and-hold.\n\n"
-            "**Симулятор рехеджа** (гл. 4.10): Монте-Карло для "
-            "дельта-нейтральной long-vol позиции. Прибыль зависит "
-            "от реализованной волатильности.\n\n"
-            "**Паритет пут-колл** (гл. 6.5): проверка на арбитраж."
+    # =================================================================
+    # 1. Привязка к активу (как в Heatmap IV / IV Rank / Skew)
+    # =================================================================
+    _va_asset = st.session_state.get("pos_asset", "")
+    _va_cat = st.session_state.get("pos_category", "")
+
+    if not _va_asset:
+        st.warning("Сначала выберите актив и категорию на вкладке «Позиция».")
+        return
+
+    st.info(
+        f"Актив: **{_va_asset}** · Категория: **{_va_cat}** "
+        f"(из вкладки «Позиция»)"
+    )
+
+    # =================================================================
+    # 2. Селектор опционной серии (дефолт — серия с вкладки «Позиция»)
+    # =================================================================
+    try:
+        _series_all = fetch_optionseries(_va_asset, _va_cat) or []
+    except Exception as _e:
+        st.error(f"Не удалось получить серии: {_e}")
+        return
+
+    if not _series_all:
+        st.warning(f"ISS не вернул серий для {_va_asset} ({_va_cat}).")
+        return
+
+    _series_sorted = sorted(_series_all, key=lambda x: x.get("expiry", ""))
+    _series_labels = [format_series_label(s["expiry"]) for s in _series_sorted]
+    _series_by_label = dict(zip(_series_labels, _series_sorted))
+
+    _pos_code = st.session_state.get("pos_series_code", "")
+    _default_idx = 0
+    for _i, _s in enumerate(_series_sorted):
+        if _s.get("code") == _pos_code:
+            _default_idx = _i
+            break
+
+    _chosen_label = st.selectbox(
+        "Опционная серия", _series_labels,
+        index=_default_idx, key="va_series_select",
+    )
+    _chosen = _series_by_label[_chosen_label]
+    _series_code = _chosen["code"]
+    _expiry = _chosen["expiry"]
+
+    # =================================================================
+    # 3. Загрузка доски
+    # =================================================================
+    with st.spinner("Загрузка доски опционов…"):
+        try:
+            _board = fetch_optionboard(_va_asset, _va_cat, _series_code)
+        except Exception as _e:
+            st.error(f"Не удалось загрузить доску: {_e}")
+            return
+
+    if not _board:
+        st.warning("Доска опционов пуста.")
+        return
+
+    _calls = _board.get("call") or []
+    _puts = _board.get("put") or []
+    _c_map = {
+        float(c["strike"]): c for c in _calls
+        if c.get("strike") is not None
+    }
+    _p_map = {
+        float(p["strike"]): p for p in _puts
+        if p.get("strike") is not None
+    }
+    _all_strikes = sorted(set(_c_map) | set(_p_map))
+    _central = _board.get("central_strike")
+
+    if not _all_strikes:
+        st.warning("На доске нет страйков.")
+        return
+
+    _spot = _get_current_market_price_for_asset(_va_asset, _va_cat)
+
+    # =================================================================
+    # 4. Параметры расчёта (общие для под-вкладок)
+    # =================================================================
+    st.markdown("### Параметры расчёта")
+
+    _pc1, _pc2, _pc3 = st.columns(3)
+
+    with _pc1:
+        _opt_type = st.selectbox(
+            "Тип опциона", ["Call", "Put"], key="va_opt_type",
         )
 
+    with _pc2:
+        _strike_default_idx = 0
+        if _central is not None:
+            try:
+                _strike_default_idx = _all_strikes.index(
+                    min(_all_strikes, key=lambda s: abs(s - float(_central)))
+                )
+            except (ValueError, TypeError):
+                _strike_default_idx = 0
+        elif _spot is not None:
+            try:
+                _strike_default_idx = _all_strikes.index(
+                    min(_all_strikes, key=lambda s: abs(s - float(_spot)))
+                )
+            except (ValueError, TypeError):
+                _strike_default_idx = 0
+
+        _strike = st.selectbox(
+            "Страйк", _all_strikes,
+            index=_strike_default_idx, key="va_strike",
+            format_func=lambda x: f"{x:g}",
+        )
+
+    with _pc3:
+        st.metric("Спот БА", f"{_spot:.2f} ₽" if _spot else "—")
+
+    # --- IV из доски (auto) ---
+    _iv_auto = None
+    if _opt_type == "Call" and _strike in _c_map:
+        _iv_auto = _c_map[_strike].get("volatility")
+    elif _opt_type == "Put" and _strike in _p_map:
+        _iv_auto = _p_map[_strike].get("volatility")
+
+    if _iv_auto is None:
+        _ivs = [
+            _src.get("volatility") for _src in
+            (_c_map.get(_strike, {}), _p_map.get(_strike, {}))
+            if _src.get("volatility") is not None
+        ]
+        if _ivs:
+            _iv_auto = float(np.mean([float(x) for x in _ivs]))
+    if _iv_auto is None:
+        _iv_auto = 20.0
+    _iv_auto = float(_iv_auto)
+
+    # --- Ставка и дивиденды из G-кривой / SmartLab ---
+    _r_auto, _q_auto = _compute_r_q_for_leg(_va_asset, _va_cat, _expiry)
+
+    # Контексты для автосброса полей
+    _ctx_iv = f"{_series_code}|{_strike}|{_opt_type}"
+    _ctx_rq = f"{_va_asset}|{_va_cat}|{_series_code}"
+
+    if _ctx_iv != st.session_state.get("va_iv_ctx"):
+        st.session_state["va_iv_input"] = _iv_auto
+        st.session_state["va_iv_ctx"] = _ctx_iv
+
+    if _ctx_rq != st.session_state.get("va_r_ctx"):
+        st.session_state["va_r_input"] = float(_r_auto)
+        st.session_state["va_r_ctx"] = _ctx_rq
+
+    if _ctx_rq != st.session_state.get("va_q_ctx"):
+        st.session_state["va_q_input"] = float(_q_auto)
+        st.session_state["va_q_ctx"] = _ctx_rq
+
+    _pc4, _pc5, _pc6 = st.columns(3)
+
+    with _pc4:
+        _iv_val = st.number_input(
+            "IV, %", min_value=0.1, max_value=500.0,
+            step=0.1, format="%.2f", key="va_iv_input",
+        )
+        st.caption(
+            f"IV из доски: **{_iv_auto:.2f}%** "
+            f"({_opt_type} {_strike:g})"
+        )
+
+    with _pc5:
+        _r_val = st.number_input(
+            "Ставка, %", min_value=-50.0, max_value=100.0,
+            step=0.1, format="%.4f", key="va_r_input",
+        )
+        st.caption(f"G-кривая ОФЗ: **{float(_r_auto):.4f}%**")
+
+    with _pc6:
+        _q_val = st.number_input(
+            "Дивдоходность, %", min_value=0.0, max_value=100.0,
+            step=0.1, format="%.4f", key="va_q_input",
+        )
+        st.caption(f"SmartLab: **{float(_q_auto):.4f}%**")
+
+    # =================================================================
+    # 5. Snapshot портфеля (не зависит от параметров выше)
+    # =================================================================
     _render_snapshot(st.session_state.get("positions", []))
 
-    _asset = st.session_state.get("pos_asset", "")
-    _atype = st.session_state.get("pos_category", "")
-
+    # =================================================================
+    # 6. Под-вкладки
+    # =================================================================
     _tabs = st.tabs([
         "Карта дельты",
         "Best / Worst case",
@@ -59,22 +236,29 @@ def _render_vol_analysis_tab():
         "Паритет пут-колл",
         "σ-диапазон",
     ])
+
     with _tabs[0]:
-        _render_delta_map(_asset, _atype)
+        _render_delta_map(_strike, _iv_val, _r_val, _opt_type, _spot, _expiry)
+
     with _tabs[1]:
-        _render_best_worst_case(_asset, _atype)
+        _render_best_worst_case(_strike, _iv_val, _r_val, _q_val,
+                                 _opt_type, _spot, _expiry)
+
     with _tabs[2]:
-        _render_rehedge_sim(_asset, _atype)
+        _render_rehedge_sim(_strike, _iv_val, _r_val, _spot, _expiry)
+
     with _tabs[3]:
-        _render_put_call_parity(_asset, _atype)
+        _render_put_call_parity(_c_map, _p_map, _spot,
+                                 _r_val, _q_val, _expiry, _strike)
+
     with _tabs[4]:
-        _render_sigma_range(_asset, _atype)
+        _render_sigma_range(_iv_val, _spot, _expiry)
 
 
 # =====================================================================
-# Снимок портфеля (гл. 4.3, 4.7, 5.2)
+# Snapshot портфеля (гл. 4.3, 4.7, 5.2)
 # =====================================================================
-def _render_snapshot(positions: list[dict]) -> None:
+def _render_snapshot(positions):
     if not positions:
         return
 
@@ -110,7 +294,7 @@ def _render_snapshot(positions: list[dict]) -> None:
 # =====================================================================
 # 1. Карта дельты (гл. 4.9)
 # =====================================================================
-def _render_delta_map(asset: str, atype: str) -> None:
+def _render_delta_map(K, sigma, r_pct, opt_type, spot, expiry_str):
     st.markdown("### Карта дельты (Fig 4.12)")
     st.caption(
         "Каждая линия — уровень Δ. Пересечение линии = сигнал к "
@@ -118,36 +302,21 @@ def _render_delta_map(asset: str, atype: str) -> None:
         "исполнения у экспирации — там рехедж максимально частый."
     )
 
-    if not asset or not atype:
-        st.info("Сначала выберите актив на вкладке «Позиция».")
-        return
-
-    spot = _get_current_market_price_for_asset(asset, atype)
     if spot is None:
-        st.warning("Не удалось получить цену БА.")
+        st.warning("Нет цены БА — карта не построена.")
         return
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        K = st.number_input("Страйк", value=float(spot), min_value=0.01,
-                             step=1.0, key="va_K")
-    with c2:
-        sigma = st.number_input("IV, %", value=20.0, min_value=1.0,
-                                 max_value=200.0, step=1.0, key="va_sigma")
-    with c3:
-        r_pct = st.number_input("Ставка, %", value=0.0, min_value=-10.0,
-                                 max_value=100.0, step=0.5, key="va_r")
-    with c4:
-        opt_type = st.selectbox("Опцион", ["Call", "Put"], key="va_type")
+    if K is None or K <= 0 or sigma <= 0:
+        st.warning("Некорректные параметры (страйк или IV).")
+        return
 
     weeks = np.arange(0, 53)
-    spots = np.linspace(K * 0.6, K * 1.4, 41)
+    spots = np.linspace(float(K) * 0.6, float(K) * 1.4, 41)
     Z = np.zeros((len(weeks), len(spots)))
     for i, w in enumerate(weeks):
         T = max((52 - w) / 52.0, 1e-6)
         for j, S in enumerate(spots):
             Z[i, j] = bs_greeks(
-                S, K, r_pct, 0.0, sigma, T,
+                S, float(K), r_pct, 0.0, sigma, T,
                 "C" if opt_type == "Call" else "P",
             ).delta
 
@@ -158,10 +327,10 @@ def _render_delta_map(asset: str, atype: str) -> None:
         colorscale="RdBu", reversescale=True,
         colorbar=dict(title="Δ"),
     ))
-    fig.add_vline(x=spot, line_color="#1e88e5", line_dash="dash",
+    fig.add_vline(x=float(spot), line_color="#1e88e5", line_dash="dash",
                   annotation_text=f"Спот {spot:.2f}")
-    fig.add_vline(x=K, line_color="#333", line_dash="dot",
-                  annotation_text=f"Страйк {K:.2f}")
+    fig.add_vline(x=float(K), line_color="#333", line_dash="dot",
+                  annotation_text=f"Страйк {K:g}")
     fig.update_layout(
         xaxis_title="Цена БА", yaxis_title="Недель до экспирации",
         height=500, margin=dict(l=20, r=20, t=40, b=20),
@@ -172,35 +341,40 @@ def _render_delta_map(asset: str, atype: str) -> None:
 # =====================================================================
 # 2. Best / Worst case (гл. 4.13, 5.6)
 # =====================================================================
-def _render_best_worst_case(asset: str, atype: str) -> None:
+def _render_best_worst_case(K, sigma, r_pct, q_pct,
+                              opt_type, spot, expiry_str):
     st.markdown("### Best / Worst case (Fig 4.16, 5.6)")
+    st.caption(
+        "Buy-and-hold профиль. Худший случай — цена «прилипла» к "
+        "страйку. Лучший — сильное движение в любую сторону."
+    )
 
-    if not asset or not atype:
-        st.info("Сначала выберите актив на вкладке «Позиция».")
-        return
-
-    spot = _get_current_market_price_for_asset(asset, atype)
     if spot is None:
         st.warning("Нет цены БА.")
         return
+    if K is None or K <= 0 or sigma <= 0:
+        st.warning("Некорректные параметры (страйк или IV).")
+        return
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        K = st.number_input("Страйк", value=float(spot), min_value=0.01,
-                             step=1.0, key="bw_K")
-    with c2:
-        iv = st.number_input("IV (заплаченная), %", value=20.0, min_value=1.0,
-                              max_value=200.0, step=1.0, key="bw_iv")
-    with c3:
-        opt_type = st.selectbox("Опцион", ["Call", "Put"], key="bw_type")
+    T = 1.0
+    if expiry_str:
+        try:
+            _exp = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            T = max((_exp - date.today()).days / 365.0, 1e-6)
+        except Exception:
+            pass
 
-    grid = np.linspace(K * 0.5, K * 1.5, 121)
+    grid = np.linspace(float(K) * 0.5, float(K) * 1.5, 121)
+
     if opt_type == "Call":
-        intrinsic = np.maximum(grid - K, 0)
-        C0 = bs_greeks(spot, K, 0.0, 0.0, iv, 1.0, "C").price
+        intrinsic = np.maximum(grid - float(K), 0)
+        C0 = bs_greeks(float(spot), float(K), r_pct, q_pct,
+                        sigma, T, "C").price
     else:
-        intrinsic = np.maximum(K - grid, 0)
-        C0 = bs_greeks(spot, K, 0.0, 0.0, iv, 1.0, "P").price
+        intrinsic = np.maximum(float(K) - grid, 0)
+        C0 = bs_greeks(float(spot), float(K), r_pct, q_pct,
+                        sigma, T, "P").price
+
     pnl = intrinsic - C0
 
     fig = go.Figure(go.Scatter(
@@ -209,9 +383,9 @@ def _render_best_worst_case(asset: str, atype: str) -> None:
         name=f"Long {opt_type} (купил-держи)",
     ))
     fig.add_hline(y=0, line_dash="dot", line_color="grey")
-    fig.add_vline(x=K, line_dash="dot", line_color="grey",
-                  annotation_text="страйк")
-    fig.add_vline(x=spot, line_color="#1e88e5", line_dash="dash",
+    fig.add_vline(x=float(K), line_dash="dot", line_color="grey",
+                  annotation_text=f"страйк {K:g}")
+    fig.add_vline(x=float(spot), line_color="#1e88e5", line_dash="dash",
                   annotation_text=f"спот {spot:.2f}")
     fig.update_layout(
         xaxis_title="Цена БА на экспирации, ₽",
@@ -219,17 +393,18 @@ def _render_best_worst_case(asset: str, atype: str) -> None:
         height=400, margin=dict(l=20, r=20, t=40, b=20),
     )
     st.plotly_chart(fig, use_container_width=True)
+
     st.caption(
-        "**Худший случай** (гл. 4.12): цена «прилипла» к страйку. "
-        "**Лучший** (гл. 4.13): сильное движение в любую сторону. "
-        "Для короткой позиции профиль зеркален."
+        f"Заплаченная премия {opt_type}: **{C0:.4f}** ₽ "
+        f"(σ={sigma:.2f}%, T={T*365:.0f} дн., r={r_pct:.2f}%, "
+        f"q={q_pct:.2f}%)."
     )
 
 
 # =====================================================================
 # 3. Симулятор рехеджа (гл. 4.10)
 # =====================================================================
-def _render_rehedge_sim(asset: str, atype: str) -> None:
+def _render_rehedge_sim(K, sigma_impl, r_pct, spot, expiry_str):
     st.markdown("### Симулятор рехеджирования (Fig 4.10)")
     st.caption(
         "Дельта-нейтральная long-vol позиция: купили колл, продали "
@@ -237,39 +412,50 @@ def _render_rehedge_sim(asset: str, atype: str) -> None:
         "реализованная vol > заплаченной IV → прибыль."
     )
 
-    if not asset or not atype:
-        st.info("Сначала выберите актив на вкладке «Позиция».")
-        return
-
-    spot = _get_current_market_price_for_asset(asset, atype)
     if spot is None:
         st.warning("Нет цены БА.")
         return
+    if K is None or K <= 0 or sigma_impl <= 0:
+        st.warning("Некорректные параметры (страйк или IV).")
+        return
 
-    c1, c2, c3, c4 = st.columns(4)
+    T_years = 1.0
+    if expiry_str:
+        try:
+            _exp = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            T_years = max((_exp - date.today()).days / 365.0, 1e-6)
+        except Exception:
+            pass
+
+    c1, c2, c3 = st.columns(3)
     with c1:
-        K = st.number_input("Страйк", value=float(spot), min_value=0.01,
-                             step=1.0, key="rs_K")
+        sigma_real = st.number_input(
+            "Реализованная vol, %", value=float(sigma_impl),
+            min_value=1.0, max_value=200.0, step=1.0,
+            key="va_rs_sr",
+        )
     with c2:
-        sigma_impl = st.number_input("Заплаченная IV, %", value=20.0,
-                                      min_value=1.0, max_value=200.0,
-                                      step=1.0, key="rs_si")
+        band = st.slider(
+            "Шаг рехеджа, Δ", 0.02, 0.30, 0.10, 0.02, key="va_rs_band",
+        )
     with c3:
-        sigma_real = st.number_input("Реализованная vol, %", value=20.0,
-                                      min_value=1.0, max_value=200.0,
-                                      step=1.0, key="rs_sr")
-    with c4:
-        band = st.slider("Шаг рехеджа, Δ", 0.02, 0.30, 0.10, 0.02,
-                          key="rs_band")
-    n_paths = st.selectbox("Путей", [200, 500, 1000], index=1,
-                            key="rs_np")
+        n_paths = st.selectbox(
+            "Путей", [200, 500, 1000], index=1, key="va_rs_np",
+        )
 
-    if not st.button("Симулировать", type="primary", key="rs_run"):
+    st.caption(
+        f"Горизонт: **{T_years*365:.0f} дн.** · "
+        f"страйк {K:g} · заплаченная IV {sigma_impl:.2f}%"
+    )
+
+    if not st.button("Симулировать", type="primary", key="va_rs_run"):
         return
 
     with st.spinner("Симуляция…"):
-        pnl = _mc_rehedge_pnl(spot, K, sigma_impl, sigma_real,
-                              int(n_paths), band)
+        pnl = _mc_rehedge_pnl(
+            float(spot), float(K), float(sigma_impl), float(sigma_real),
+            int(n_paths), float(band), float(T_years), r_pct,
+        )
 
     fig = go.Figure(go.Histogram(x=pnl, nbinsx=60,
                                   marker_color="steelblue"))
@@ -290,32 +476,35 @@ def _render_rehedge_sim(asset: str, atype: str) -> None:
     m4.metric("95% квантиль", f"{np.quantile(pnl, 0.95):.2f}")
 
     if sigma_real > sigma_impl:
-        st.success(f"Реализованная vol > заплаченной IV → в среднем прибыль.")
+        st.success("Реализованная vol > заплаченной IV → в среднем прибыль.")
     elif sigma_real < sigma_impl:
-        st.warning(f"Реализованная vol < заплаченной IV → в среднем убыток.")
+        st.warning("Реализованная vol < заплаченной IV → в среднем убыток.")
     else:
         st.info("Реализованная vol = заплаченной IV → безубыток.")
 
 
-def _mc_rehedge_pnl(S0, K, sigma_impl, sigma_real, n_paths, band):
+def _mc_rehedge_pnl(S0, K, sigma_impl, sigma_real,
+                     n_paths, band, T_years, r_pct):
     rng = np.random.default_rng(42)
-    T, n_steps = 1.0, 252
-    dt = T / n_steps
-    C0 = bs_greeks(S0, K, 0.0, 0.0, sigma_impl, T, "C").price
+    n_steps = max(int(252 * T_years), 20)
+    dt = T_years / n_steps
+    C0 = bs_greeks(S0, K, r_pct, 0.0, sigma_impl, T_years, "C").price
+    sig_r = sigma_real / 100.0
 
     out = np.zeros(n_paths)
     for p in range(n_paths):
         S = S0
-        d = bs_greeks(S, K, 0.0, 0.0, sigma_impl, T, "C").delta
+        d = bs_greeks(S, K, r_pct, 0.0, sigma_impl, T_years, "C").delta
         stock = -d
         cash = -C0 + d * S
         for step in range(1, n_steps + 1):
-            S_new = S * math.exp(
-                -0.5 * (sigma_real / 100.0) ** 2 * dt
-                + (sigma_real / 100.0) * math.sqrt(dt) * rng.standard_normal()
+            S_new = S * np.exp(
+                -0.5 * sig_r ** 2 * dt
+                + sig_r * np.sqrt(dt) * rng.standard_normal()
             )
-            tau = max(T - step * dt, 1e-9)
-            d_new = bs_greeks(S_new, K, 0.0, 0.0, sigma_impl, tau, "C").delta
+            tau = max(T_years - step * dt, 1e-9)
+            d_new = bs_greeks(S_new, K, r_pct, 0.0, sigma_impl,
+                               tau, "C").delta
             if abs(d_new - d) >= band and step < n_steps:
                 cash += (d_new - d) * S_new
                 stock = -d_new
@@ -326,71 +515,49 @@ def _mc_rehedge_pnl(S0, K, sigma_impl, sigma_real, n_paths, band):
 
 
 # =====================================================================
-# 4. Паритет пут-колл (гл. 6.5) — НЕ на доске, отдельной таблицей
+# 4. Паритет пут-колл (гл. 6.5) — на данных доски, не на board.py
 # =====================================================================
-def _render_put_call_parity(asset: str, atype: str) -> None:
+def _render_put_call_parity(c_map, p_map, spot, r_pct, q_pct,
+                              expiry_str, current_strike):
     st.markdown("### Паритет пут-колл (гл. 6.5)")
     st.caption(
         "C − P = S·e^(−qT) − K·e^(−rT). Отклонение > 0 — либо арбитраж, "
         "либо устаревшие данные. Для MOEX — чаще второе."
     )
 
-    if not asset or not atype:
-        st.info("Сначала выберите актив на вкладке «Позиция».")
-        return
-
-    series_code = st.session_state.get("pos_series_code", "")
-    expiry = st.session_state.get("pos_expiry", "")
-    if not series_code or not expiry:
-        st.info("Нет выбранной серии. Откройте «Позиция» и выберите серию.")
-        return
-
-    board = fetch_optionboard(asset, atype, series_code)
-    if not board:
-        st.warning("Не удалось загрузить доску.")
-        return
-
-    spot = _get_current_market_price_for_asset(asset, atype)
     if spot is None:
         st.warning("Нет цены БА.")
         return
 
-    r_default, q_default = _compute_r_q_for_leg(asset, atype, expiry)
-    c1, c2 = st.columns(2)
-    with c1:
-        r_pct = st.number_input("Ставка, %", value=float(r_default),
-                                 step=0.5, key="pcp_r")
-    with c2:
-        q_pct = st.number_input("Дивдоходность, %", value=float(q_default),
-                                 min_value=0.0, step=0.5, key="pcp_q")
-
-    try:
-        exp_date = datetime.strptime(expiry, "%Y-%m-%d").date()
-        T = max((exp_date - date.today()).days / 365.0, 1e-6)
-    except Exception:
+    if expiry_str:
+        try:
+            _exp = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            T = max((_exp - date.today()).days / 365.0, 1e-6)
+        except Exception:
+            T = 1.0 / 12.0
+    else:
         T = 1.0 / 12.0
 
-    calls = board.get("call") or []
-    puts = board.get("put") or []
-    c_map = {float(c["strike"]): c for c in calls if c.get("strike") is not None}
-    p_map = {float(p["strike"]): p for p in puts if p.get("strike") is not None}
     common = sorted(set(c_map) & set(p_map))
-
     rows = []
     for k in common:
         C = c_map[k].get("theorprice") or c_map[k].get("last") or 0
         P = p_map[k].get("theorprice") or p_map[k].get("last") or 0
         if not C or not P:
             continue
-        dev = put_call_parity_deviation(float(C), float(P), float(spot),
-                                         float(k), r_pct, q_pct, T)
+        dev = put_call_parity_deviation(
+            float(C), float(P), float(spot), float(k),
+            r_pct, q_pct, T,
+        )
         rows.append({
             "Страйк": k,
             "C (theor)": float(C),
             "P (theor)": float(P),
             "C − P": float(C) - float(P),
-            "S·e^(−qT) − K·e^(−rT)": (float(spot) * math.exp(-q_pct/100 * T)
-                                       - float(k) * math.exp(-r_pct/100 * T)),
+            "S·e^(−qT) − K·e^(−rT)": (
+                float(spot) * np.exp(-q_pct / 100 * T)
+                - float(k) * np.exp(-r_pct / 100 * T)
+            ),
             "Отклонение, ₽": dev,
             "Отклонение, %": dev / float(spot) * 100,
         })
@@ -399,6 +566,7 @@ def _render_put_call_parity(asset: str, atype: str) -> None:
         st.info("Нет страйков с ценами и у call, и у put.")
         return
 
+    import pandas as pd  # локально, чтобы не тащить в шапку
     df = pd.DataFrame(rows)
     st.dataframe(
         df.style.format({
@@ -422,11 +590,21 @@ def _render_put_call_parity(asset: str, atype: str) -> None:
     else:
         st.success(f"Паритет соблюдён (макс. {max_dev:.2f}%).")
 
+    # Подсветка выбранного страйка пользователя
+    if current_strike in df["Страйк"].values:
+        _sel = df[df["Страйк"] == current_strike].iloc[0]
+        st.caption(
+            f"Выбранный страйк **{current_strike:g}**: "
+            f"C={_sel['C (theor)']:.4f}, P={_sel['P (theor)']:.4f}, "
+            f"отклонение={_sel['Отклонение, ₽']:+.4f} ₽ "
+            f"({_sel['Отклонение, %']:+.4f}%)"
+        )
+
 
 # =====================================================================
 # 5. σ-диапазон (гл. 2.7)
 # =====================================================================
-def _render_sigma_range(asset: str, atype: str) -> None:
+def _render_sigma_range(sigma, spot, expiry_str):
     st.markdown("### σ-диапазон цены (гл. 2.7)")
     st.caption(
         "1σ ≈ 66% вероятности, 2σ ≈ 95%, 3σ ≈ 99%. "
@@ -434,31 +612,43 @@ def _render_sigma_range(asset: str, atype: str) -> None:
         "расходится с реализованной — это и есть edge (или риск)."
     )
 
-    if not asset or not atype:
-        st.info("Сначала выберите актив на вкладке «Позиция».")
-        return
-
-    spot = _get_current_market_price_for_asset(asset, atype)
     if spot is None:
         st.warning("Нет цены БА.")
         return
+    if sigma <= 0:
+        st.warning("Некорректная IV.")
+        return
+
+    _default_months = 3
+    if expiry_str:
+        try:
+            _exp = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            _d = (_exp - date.today()).days
+            if _d > 0:
+                _default_months = max(1, min(36, round(_d / 30)))
+        except Exception:
+            pass
 
     c1, c2 = st.columns(2)
     with c1:
-        sigma = st.number_input("σ, %", value=20.0, min_value=1.0,
-                                 max_value=200.0, step=1.0, key="sr_sigma")
+        horizon = st.number_input(
+            "Горизонт, мес.", value=_default_months,
+            min_value=1, max_value=36, step=1, key="va_sr_months",
+        )
     with c2:
-        T_months = st.number_input("Горизонт, мес.", value=3, min_value=1,
-                                    max_value=36, step=1, key="sr_months")
+        st.metric("Спот БА", f"{spot:.2f} ₽")
 
-    ranges = sigma_range_forecast(spot, sigma, T_months / 12.0)
+    ranges = sigma_range_forecast(float(spot), float(sigma),
+                                    horizon / 12.0)
+
     st.markdown(
-        f"**Текущая цена**: {spot:.2f} ₽ · **σ**: {sigma}% · "
-        f"**T**: {T_months} мес."
+        f"**Текущая цена**: {spot:.2f} ₽ · **σ**: {sigma:.2f}% · "
+        f"**T**: {horizon} мес."
     )
     for n, (lo, hi) in ranges.items():
         prob = {1: "66%", 2: "95%", 3: "99%"}[n]
         st.markdown(
             f"- **{n}σ ({prob})**: [{lo:.2f}, {hi:.2f}] ₽ "
-            f"({(lo/spot-1)*100:+.1f}% … {(hi/spot-1)*100:+.1f}%)"
+            f"({(lo / spot - 1) * 100:+.1f}% … "
+            f"{(hi / spot - 1) * 100:+.1f}%)"
         )
