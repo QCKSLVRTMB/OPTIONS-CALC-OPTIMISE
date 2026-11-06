@@ -21,6 +21,31 @@ def _render_alert_card(r):
     _high_vol = r.get("high_volume", False)
     _spike = r.get("intraday_spike", False)
 
+    _expect_buy = r.get("expect_buy", "")
+    _expect_sell = r.get("expect_sell", "")
+    _comment_buy = r.get("comment_buy", "")
+    _comment_sell = r.get("comment_sell", "")
+
+    # Плашка для стрелы покупки (1, 2)
+    _buy_arrow_badge = ""
+    if _expect_buy in ("1", "2"):
+        _arrow_color = "#00a651" if _expect_buy == "1" else "#4caf50"
+        _buy_arrow_badge = (
+            f"<span style='background:{_arrow_color}; color:white; "
+            f"border-radius:4px; padding:2px 6px; font-size:.72rem; "
+            f"font-weight:700; margin-left:6px; vertical-align:middle;'>{_expect_buy}</span>"
+        )
+        
+    # Плашка для стрелы продажи (3, 4)
+    _sell_arrow_badge = ""
+    if _expect_sell in ("3", "4"):
+        _arrow_color = "#d32f2f" if _expect_sell == "4" else "#e57373"
+        _sell_arrow_badge = (
+            f"<span style='background:{_arrow_color}; color:white; "
+            f"border-radius:4px; padding:2px 6px; font-size:.72rem; "
+            f"font-weight:700; margin-left:6px; vertical-align:middle;'>{_expect_sell}</span>"
+        )
+
     _checks_key = f"{_ticker.upper().strip()}|{_category.strip()}"
     _all_checks_card = st.session_state.get("_alert_checks", {})
     _stored_card = _all_checks_card.get(_checks_key) or {}
@@ -218,6 +243,7 @@ def _render_alert_card(r):
             return _opt_labels.get(v, v)
 
         _lc1, _lc2 = st.columns(2)
+        
         with _lc1:
             st.markdown(
                 f"<div style='background:{_lvl_buy_bg}; "
@@ -230,8 +256,9 @@ def _render_alert_card(r):
                 f"color:{_buy_fg}; background:{_buy_bg}; "
                 f"padding:2px 6px; border-radius:10px;'>{_buy_mark}</div>"
                 f"</div>"
+                # Добавили _buy_arrow_badge
                 f"<div style='font-size:1.02rem; font-weight:700; color:#111; "
-                f"line-height:1.2; margin-top:2px;'>{_lvl_buy:.2f}</div>"
+                f"line-height:1.2; margin-top:2px;'>{_lvl_buy:.2f} {_buy_arrow_badge}</div>"
                 f"<div style='font-size:.76rem; color:#333; margin-top:1px;'>"
                 f"{_buy_dev_str}</div>"
                 f"{_at_buy_badge}"
@@ -249,6 +276,15 @@ def _render_alert_card(r):
                 format_func=_fmt_opt,
                 label_visibility="collapsed",
             )
+            
+            # Комментарий к уровню покупок
+            if _comment_buy:
+                st.markdown(
+                    f"<div style='font-size:.72rem; color:#4a6f8a; "
+                    f"background:#f0f4f8; padding:4px 8px; border-radius:4px; "
+                    f"margin-top:4px; line-height:1.2;'>💬 {_comment_buy}</div>",
+                    unsafe_allow_html=True,
+                )
 
         with _lc2:
             st.markdown(
@@ -262,8 +298,9 @@ def _render_alert_card(r):
                 f"color:{_sell_fg}; background:{_sell_bg}; "
                 f"padding:2px 6px; border-radius:10px;'>{_sell_mark}</div>"
                 f"</div>"
+                # Добавили _sell_arrow_badge
                 f"<div style='font-size:1.02rem; font-weight:700; color:#111; "
-                f"line-height:1.2; margin-top:2px;'>{_lvl_sell:.2f}</div>"
+                f"line-height:1.2; margin-top:2px;'>{_lvl_sell:.2f} {_sell_arrow_badge}</div>"
                 f"<div style='font-size:.76rem; color:#333; margin-top:1px;'>"
                 f"{_sell_dev_str}</div>"
                 f"{_at_sell_badge}"
@@ -281,6 +318,15 @@ def _render_alert_card(r):
                 format_func=_fmt_opt,
                 label_visibility="collapsed",
             )
+            
+            # Комментарий к уровню продаж
+            if _comment_sell:
+                st.markdown(
+                    f"<div style='font-size:.72rem; color:#4a6f8a; "
+                    f"background:#f0f4f8; padding:4px 8px; border-radius:4px; "
+                    f"margin-top:4px; line-height:1.2;'>💬 {_comment_sell}</div>",
+                    unsafe_allow_html=True,
+                )
 
         _new_checks = st.session_state.get("_alert_checks", {})
         if _checks_key not in _new_checks:
