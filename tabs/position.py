@@ -28,6 +28,7 @@ from core.options import (
     fetch_optionseries,
     fetch_all_series_for_asset,
     fetch_optionboard,
+    _fetch_board_cached_30s,
 )
 from core.alerts import (
     find_alert_levels,
@@ -69,7 +70,6 @@ from core.positions_cache import (
     _load_cache,
     _save_cache,
     _positions_signature,
-    _fetch_board_cached_30s,
     _find_board_row,
     _find_board_row_by_secid,
     _strike_eq,
