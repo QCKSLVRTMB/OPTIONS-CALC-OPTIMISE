@@ -40,6 +40,7 @@ from tabs.skew import _render_skew_tab
 from tabs.journal import _render_journal_tab
 from tabs.kelly import _render_kelly_tab
 from tabs.alerts import _render_alerts_tab
+from tabs.vol_analysis import _render_vol_analysis_tab  # ← NEW
 
 
 # ==================================================================
@@ -152,6 +153,7 @@ _RENDERERS = {
     "Журнал": _render_journal_tab,
     "Келли": _render_kelly_tab,
     "Оповещения": _render_alerts_tab,
+    "Vol Analysis": _render_vol_analysis_tab,  # ← NEW
 }
 
 if _active_tab == "Доска опционов":
