@@ -1,4 +1,9 @@
-"""Биржевой график: OHLC + объём + уровни + профиль P&L."""
+"""Биржевой график: OHLC + объём + уровни + профиль P&L.
+
+Склейка сессий реализована через `rangebreaks` в Plotly —
+данные НЕ фильтруются, ось X просто скрывает выходные и ночные часы,
+поэтому бары идут подряд без визуальных «рваных» провалов.
+"""
 from datetime import datetime
 
 import numpy as np
@@ -17,6 +22,25 @@ def render_exchange_chart(df, positions, buy_level, sell_level, strikes, title, 
     if df is None or df.empty:
         st.info(f"Нет данных для {title}")
         return
+
+    # ==================================================================
+    # СКЛЕЙКА СЕССИЙ через rangebreaks.
+    #
+    # D1 (interval=24): скрывает субботу и воскресенье — бары идут
+    #                   непрерывно: пятница → понедельник.
+    # H1 (interval=60): скрывает субботу/воскресенье И ночные часы
+    #                   (23:00 → 07:00). Внутри дня остаются только
+    #                   бары с 07:00 до 22:59, стыки дней без провалов.
+    #
+    # Если вечерняя сессия биржи доходит до 23:50 и нужно её показать —
+    # замените `23` на `24` в bounds=[23, 7] (или на нужный час).
+    # ==================================================================
+    _rangebreaks = [
+        dict(bounds=["sat", "mon"]),  # выходные
+    ]
+    if interval == 60:
+        _rangebreaks.append(dict(bounds=[23, 7], pattern="hour"))
+
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
         vertical_spacing=0.04, row_heights=[0.78, 0.22],
@@ -255,6 +279,7 @@ def render_exchange_chart(df, positions, buy_level, sell_level, strikes, title, 
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             rangeslider_visible=False, row=1, col=1,
             tickformat=_x_tickfmt,
+            rangebreaks=_rangebreaks,
             showspikes=True, spikemode='across', spikesnap='cursor',
             spikecolor='#666666', spikethickness=1, spikedash='dot',
         )
@@ -262,6 +287,7 @@ def render_exchange_chart(df, positions, buy_level, sell_level, strikes, title, 
             type='date', range=[_x_min_val, _x_max_extended],
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             row=2, col=1, tickformat=_x_tickfmt,
+            rangebreaks=_rangebreaks,
             showspikes=True, spikemode='across', spikesnap='cursor',
             spikecolor='#666666', spikethickness=1, spikedash='dot',
         )
