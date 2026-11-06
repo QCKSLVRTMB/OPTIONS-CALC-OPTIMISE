@@ -1306,7 +1306,7 @@ def _render_position_tab():
                             )
                             use_auto_price = st.checkbox(
                                 "Использовать авто-цену из доски",
-                                value=True, key="form_use_auto_price",
+                                value=False, key="form_use_auto_price",
                             )
                         elif (instrument_type == "Опцион"
                               and chosen_strike is not None):
