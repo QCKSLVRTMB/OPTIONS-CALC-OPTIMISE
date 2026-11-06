@@ -465,7 +465,18 @@ def load_google_sheet_cached(sheet_url, cache_buster):
 
 def _normalize_alerts_df(_xls):
     _col_map = {}
-    for c in _xls.columns:
+    
+    # Находим индексы, чтобы отделить колонки покупок от колонок продаж
+    buy_idx = -1
+    sell_idx = -1
+    for i, c in enumerate(_xls.columns):
+        c_str = str(c).strip().lower()
+        if "уровень покуп" in c_str or "bid" in c_str:
+            buy_idx = i
+        elif "уровень продаж" in c_str or "ask" in c_str:
+            sell_idx = i
+
+    for i, c in enumerate(_xls.columns):
         c_str = str(c).strip().lower()
         if "тикер" in c_str:
             _col_map[c] = "Тикер БА"
@@ -479,293 +490,46 @@ def _normalize_alerts_df(_xls):
             _col_map[c] = "Тенденция"
         elif c_str in ("тф уровня", "tf уровня", "tf", "timeframe"):
             _col_map[c] = "ТФ уровня"
-        elif "покуп" in c_str or "bid" in c_str:
+        elif "уровень покуп" in c_str or "bid" in c_str:
             _col_map[c] = "Уровень покупок"
-        elif "продаж" in c_str or "ask" in c_str:
+        elif "уровень продаж" in c_str or "ask" in c_str:
             _col_map[c] = "Уровень продаж"
+        elif "ожидание" in c_str:
+            if i < sell_idx:
+                _col_map[c] = "Ожидание покупки"
+            else:
+                _col_map[c] = "Ожидание продажи"
+        elif "комментар" in c_str:
+            if i < sell_idx:
+                _col_map[c] = "Комментарий покупки"
+            else:
+                _col_map[c] = "Комментарий продажи"
+
     _xls = _xls.rename(columns=_col_map)
+    
     required = ["Тикер БА", "Категория БА", "Уровень покупок", "Уровень продаж"]
     missing = [c for c in required if c not in _xls.columns]
     if missing:
         return pd.DataFrame(), f"В таблице нет колонок: {', '.join(missing)}"
-    _xls["Уровень покупок"] = pd.to_numeric(_xls["Уровень покупок"],
-                                             errors="coerce")
-    _xls["Уровень продаж"] = pd.to_numeric(_xls["Уровень продаж"],
-                                            errors="coerce")
-    _xls = _xls.dropna(subset=["Тикер БА", "Уровень покупок",
-                                "Уровень продаж"])
-    for _opt_col in ("Тренд", "Волна", "Тенденция", "ТФ уровня"):
+        
+    _xls["Уровень покупок"] = pd.to_numeric(_xls["Уровень покупок"], errors="coerce")
+    _xls["Уровень продаж"] = pd.to_numeric(_xls["Уровень продаж"], errors="coerce")
+    _xls = _xls.dropna(subset=["Тикер БА", "Уровень покупок", "Уровень продаж"])
+    
+    # Заполняем пустые новые колонки
+    for _opt_col in ("Тренд", "Волна", "Тенденция", "ТФ уровня", 
+                     "Ожидание покупки", "Комментарий покупки",
+                     "Ожидание продажи", "Комментарий продажи"):
         if _opt_col not in _xls.columns:
             _xls[_opt_col] = ""
         else:
             _xls[_opt_col] = (_xls[_opt_col].fillna("")
                               .astype(str).str.strip())
+                              
+    # Очищаем от лишних .0 (например, "2.0" -> "2")
+    for _exp_col in ("Ожидание покупки", "Ожидание продажи"):
+        _xls[_exp_col] = _xls[_exp_col].apply(
+            lambda x: str(int(float(x))) if x and str(x).replace('.','',1).isdigit() else str(x)
+        )
+        
     return _xls, None
-
-
-def _get_engine_market(asset_type_ui):
-    if asset_type_ui in ("Фьючерс", "Валюта", "Товар"):
-        return "futures", "forts"
-    if asset_type_ui == "Индекс":
-        return "stock", "index"
-    return "stock", "shares"
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def resolve_underlying_secid(asset_code, asset_type_ui):
-    if asset_type_ui == "Акция":
-        return asset_code.upper()
-    if asset_type_ui == "Индекс":
-        idx_map = {"RTS": "RTSI", "MIX": "IMOEX"}
-        return idx_map.get(asset_code.upper(), asset_code.upper())
-    if asset_type_ui in ("Фьючерс", "Валюта", "Товар"):
-        url = ("https://iss.moex.com/iss/engines/futures/markets/forts/"
-               "securities.json")
-        data = iss_get_json(url,
-                            params={"iss.meta": "off",
-                                    "iss.only": "securities"},
-                            timeout=20)
-        if data is None:
-            return None
-        try:
-            cols = data["securities"]["columns"]
-            rows = data["securities"]["data"]
-            df = pd.DataFrame(rows, columns=cols)
-            if "ASSETCODE" not in df.columns:
-                return None
-            df = df[df["ASSETCODE"] == asset_code.upper()]
-            if df.empty:
-                return None
-            today_str = date.today().isoformat()
-            if "LASTTRADEDATE" in df.columns:
-                df_live = df[df["LASTTRADEDATE"] >= today_str]
-                df = df_live if not df_live.empty else df
-                df = df.dropna(subset=["LASTTRADEDATE"])
-                df = df.sort_values("LASTTRADEDATE")
-            return df.iloc[0]["SECID"] if not df.empty else None
-        except Exception:
-            return None
-    return asset_code.upper()
-
-
-# =====================================================================
-# Данные БА с ISS
-# =====================================================================
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_futures_info_iss(secid):
-    if not secid:
-        return None
-    url = (f"https://iss.moex.com/iss/engines/futures/markets/forts/"
-           f"securities/{secid}.json")
-    params = {"iss.meta": "off", "iss.only": "securities,marketdata"}
-    data = iss_get_json(url, params=params, timeout=15)
-    if data is None:
-        return None
-    result = {"last": None, "expiration": None, "go": None, "secid": secid}
-    sec = data.get("securities", {})
-    if sec.get("data"):
-        rd = dict(zip(sec["columns"], sec["data"][0]))
-        for key in ("LASTTRADEDATE", "LASTDELDATE"):
-            if rd.get(key):
-                try:
-                    result["expiration"] = str(rd[key])
-                except Exception:
-                    pass
-                break
-    md = data.get("marketdata", {})
-    if md.get("data"):
-        rd = dict(zip(md["columns"], md["data"][0]))
-        for key in ("LAST", "MARKETPRICE", "LCLOSEPRICE",
-                    "LASTTOPREVPRICE", "OPEN", "SETTLEPRICE"):
-            v = rd.get(key)
-            if v and v > 0:
-                result["last"] = float(v)
-                break
-    return result
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_stock_info_iss(secid):
-    if not secid:
-        return None
-    url = (f"https://iss.moex.com/iss/engines/stock/markets/shares/"
-           f"securities/{secid}.json")
-    params = {"iss.meta": "off", "iss.only": "securities,marketdata"}
-    data = iss_get_json(url, params=params, timeout=15)
-    if data is None:
-        return None
-    result = {"last": None, "shortname": None, "secid": secid}
-    sec = data.get("securities", {})
-    if sec.get("data"):
-        rd = dict(zip(sec["columns"], sec["data"][0]))
-        result["shortname"] = rd.get("SHORTNAME")
-        for key in ("LAST", "PREVPRICE", "PREVLEGALCLOSEPRICE"):
-            v = rd.get(key)
-            if v and v > 0:
-                result["last"] = float(v)
-                break
-    md = data.get("marketdata", {})
-    if md.get("data"):
-        rd = dict(zip(md["columns"], md["data"][0]))
-        for key in ("LAST", "MARKETPRICE", "LCLOSEPRICE",
-                    "LASTTOPREVPRICE", "OPEN"):
-            v = rd.get(key)
-            if v and v > 0:
-                result["last"] = float(v)
-                break
-    return result
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_index_info_iss(secid):
-    if not secid:
-        return None
-    url = (f"https://iss.moex.com/iss/engines/stock/markets/index/"
-           f"securities/{secid}.json")
-    params = {"iss.meta": "off", "iss.only": "securities,marketdata"}
-    data = iss_get_json(url, params=params, timeout=15)
-    if data is None:
-        return None
-    result = {"last": None, "secid": secid, "expiration": None}
-    md = data.get("marketdata", {})
-    if md.get("data"):
-        rd = dict(zip(md["columns"], md["data"][0]))
-        for key in ("CURRENTVALUE", "LASTVALUE", "LAST", "LCLOSEPRICE",
-                    "OPEN"):
-            v = rd.get(key)
-            if v and v > 0:
-                result["last"] = float(v)
-                break
-    return result
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_ba_iss_info(secid, asset_type_ui):
-    if asset_type_ui in ("Фьючерс", "Валюта", "Товар"):
-        return fetch_futures_info_iss(secid)
-    elif asset_type_ui == "Индекс":
-        return fetch_index_info_iss(secid)
-    return fetch_stock_info_iss(secid)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_futures_contracts_list(asset_code):
-    if not asset_code:
-        return []
-    url = ("https://iss.moex.com/iss/engines/futures/markets/forts/"
-           "securities.json")
-    data = iss_get_json(url,
-                        params={"iss.meta": "off",
-                                "iss.only": "securities"},
-                        timeout=20)
-    if data is None:
-        return []
-    try:
-        cols = data["securities"]["columns"]
-        rows = data["securities"]["data"]
-        df = pd.DataFrame(rows, columns=cols)
-        if "ASSETCODE" not in df.columns:
-            return []
-        df = df[df["ASSETCODE"] == asset_code.upper()]
-        if df.empty:
-            return []
-        if "LASTTRADEDATE" in df.columns:
-            df = df.dropna(subset=["LASTTRADEDATE"])
-            today_str = date.today().isoformat()
-            df = df[df["LASTTRADEDATE"] >= today_str]
-        df = df.sort_values("LASTTRADEDATE")
-        result = []
-        for _, row in df.iterrows():
-            secid = str(row.get("SECID", "")).strip()
-            ltd = str(row.get("LASTTRADEDATE", "")).strip()
-            shortname = str(row.get("SHORTNAME", secid)).strip()
-            if secid and ltd and ltd >= "2000-01-01":
-                result.append({
-                    "secid": secid,
-                    "expiration": ltd,
-                    "shortname": shortname,
-                })
-        return result
-    except Exception:
-        return []
-
-
-def apply_parity_delta(position):
-    if position.get("Тип инструмента") == "БА" \
-            or position.get("Опцион") == "БА":
-        qty = int(position.get("Кол-во", 0))
-        sign = 1 if qty >= 0 else -1
-        position["Дельта"] = float(sign)
-        position["Гамма"] = 0.0
-        position["Вега"] = 0.0
-        position["Тета"] = 0.0
-        position["Ро"] = 0.0
-    return position
-
-
-# =====================================================================
-# Бары и последняя цена закрытия
-# =====================================================================
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_bars(secid, interval=24, days=180,
-               engine="futures", market="forts"):
-    if not secid:
-        return pd.DataFrame()
-    end = datetime.now()
-    start = end - timedelta(days=days)
-    url = (f"https://iss.moex.com/iss/engines/{engine}/markets/{market}/"
-           f"securities/{secid}/candles.json")
-    params = {
-        "from": start.strftime("%Y-%m-%d"),
-        "till": end.strftime("%Y-%m-%d"),
-        "interval": interval,
-        "iss.meta": "off",
-    }
-    data = iss_get_json(url, params=params, timeout=20)
-    if data is None:
-        return pd.DataFrame()
-    cols = data.get("candles", {}).get("columns", [])
-    rows = data.get("candles", {}).get("data", [])
-    if not rows or not cols:
-        return pd.DataFrame()
-    df = pd.DataFrame(rows, columns=cols)
-    df["begin"] = pd.to_datetime(df["begin"], errors="coerce")
-    df = df.dropna(subset=["begin", "open", "high", "low", "close"])
-    df = df[df["begin"] >= pd.Timestamp("2000-01-01")]
-    df = df[(df["high"] > 0) & (df["low"] > 0) & (df["close"] > 0)]
-    df = df.sort_values("begin").reset_index(drop=True)
-    return df
-
-
-@st.cache_data(ttl=CHECKLIST_RULES["cache_last_price_ttl_sec"], show_spinner=False)
-def get_last_close_price(secid, engine, market):
-    if not secid:
-        return None
-    end = datetime.now()
-    start = end - timedelta(days=7)
-    url = (f"https://iss.moex.com/iss/engines/{engine}/markets/{market}/"
-           f"securities/{secid}/candles.json")
-    params = {
-        "from": start.strftime("%Y-%m-%d"),
-        "till": end.strftime("%Y-%m-%d"),
-        "interval": 24,
-        "iss.meta": "off",
-    }
-    data = iss_get_json(url, params=params, timeout=15)
-    if data is None:
-        return None
-    cols = data.get("candles", {}).get("columns", [])
-    rows = data.get("candles", {}).get("data", [])
-    if not rows or not cols:
-        return None
-    df = pd.DataFrame(rows, columns=cols)
-    if "close" not in df.columns:
-        return None
-    df = df.dropna(subset=["close"])
-    df = df[df["close"] > 0]
-    if df.empty:
-        return None
-    try:
-        return float(df.iloc[-1]["close"])
-    except Exception:
-        return None
