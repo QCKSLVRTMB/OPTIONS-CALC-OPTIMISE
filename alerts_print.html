@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Оповещения по уровням — печать A4</title>
+<style>
+  @page { size: A4 landscape; margin: 6mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    margin: 0; padding: 12px; background: #f5f7fa; color: #1a3b4f;
+  }
+
+  /* ============ ТУЛБАР ============ */
+  .toolbar {
+    background: #fff; padding: 10px; border-radius: 8px;
+    margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  }
+  .toolbar button {
+    padding: 7px 13px; border: none; border-radius: 6px;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-primary   { background: #1e88e5; color: #fff; }
+  .btn-primary:hover { background: #1565c0; }
+  .btn-secondary { background: #eef2f5; color: #1a3b4f; }
+  .btn-secondary:hover { background: #dde5ed; }
+  .btn-success   { background: #00a651; color: #fff; }
+  .btn-success:hover { background: #008a42; }
+  .btn-danger    { background: #d32f2f; color: #fff; }
+  .btn-danger:hover { background: #b71c1c; }
+  .btn-warn      { background: #e6a500; color: #fff; }
+  .btn-warn:hover { background: #c89000; }
+  .status {
+    font-size: 12px; color: #5a6b78; margin-left: auto;
+    max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ============ ПАНЕЛЬ НАСТРОЕК ============ */
+  .settings-panel {
+    background: #fff; border-radius: 8px; padding: 0;
+    margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    font-size: 13px;
+  }
+  .settings-panel > summary {
+    padding: 10px 14px; cursor: pointer; font-weight: 700;
+    color: #1a3b4f; list-style: none; user-select: none;
+    border-bottom: 1px solid #eef2f5;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .settings-panel > summary::before {
+    content: "▸"; display: inline-block;
+    transition: transform .15s;
+  }
+  .settings-panel[open] > summary::before { transform: rotate(90deg); }
+  .settings-panel > summary::-webkit-details-marker { display: none; }
+  .settings-inner { padding: 10px 14px 14px; }
+
+  .presets {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;
+  }
+  .presets button {
+    padding: 6px 12px; border: 1px solid #cfdfe9; border-radius: 20px;
+    background: #f6f9fc; color: #1a3b4f; font-size: 12px;
+    font-weight: 600; cursor: pointer;
+    transition: all .15s;
+  }
+  .presets button:hover { background: #e3eef8; border-color: #1e88e5; }
+
+  .col-toggles { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .col-toggles th {
+    text-align: left; padding: 4px 6px; color: #4a6f8a;
+    font-weight: 700; font-size: 11px;
+    border-bottom: 1px solid #eef2f5;
+  }
+  .col-toggles th.c { text-align: center; width: 90px; }
+  .col-toggles td { padding: 3px 6px; border-bottom: 1px solid #f4f7fa; }
+  .col-toggles td.c { text-align: center; }
+  .col-toggles input[type="checkbox"] {
+    width: 16px; height: 16px; cursor: pointer;
+  }
+
+  /* ============ ТАБЛИЦА ============ */
+  .table-wrapper {
+    background: #fff; border-radius: 8px; padding: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow-x: auto;
+  }
+  .print-header { display: none; }
+
+  /* --- ЧЁРНАЯ СЕТКА --- */
+  table#alerts-table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1.5px solid #000;
+    font-size: 12px;
+  }
+  #alerts-table thead th {
+    background: #eef6fb; color: #1a3b4f; font-weight: 700;
+    padding: 7px 5px; text-align: left;
+    border: 1px solid #000;
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: .03em; white-space: nowrap;
+  }
+  #alerts-table thead th.num { text-align: right; }
+  #alerts-table thead th.ck  { text-align: center; }
+  #alerts-table tbody td {
+    padding: 5px;
+    border: 1px solid #000;
+  }
+  #alerts-table tbody tr:hover { background: #f8fbfd; }
+
+  td[contenteditable="true"] { cursor: text; }
+  td[contenteditable="true"]:focus {
+    outline: 2px solid #1e88e5; background: #f0f7ff;
+  }
+
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ck  { text-align: center; font-weight: 700; }
+  .row-index { color: #7a8b99; font-weight: 600; }
+  .ck-1 { color: #00a651; }
+  .ck-2 { color: #d32f2f; }
+  .ck-3 { color: #00a651; }
+  .ck-4 { color: #d32f2f; }
+
+  /* ============ ПЕЧАТЬ A4 — сетка тоже чёрная ============ */
+  @media print {
+    @page { size: A4 landscape; margin: 5mm; }
+    body {
+      background: #fff; padding: 0; font-size: 9px;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .toolbar,
+    .settings-panel { display: none !important; }
+    .print-header {
+      display: block; text-align: center; font-size: 12px;
+      font-weight: 800; margin-bottom: 3mm; color: #1a3b4f;
+    }
+    .print-header .sub {
+      font-size: 8px; font-weight: 400;
+      color: #5a6b78; margin-top: 1mm;
+    }
+    .table-wrapper { box-shadow: none; padding: 0; }
+
+    #alerts-table {
+      font-size: 8.5px; page-break-inside: auto;
+      border: 1px solid #000;
+    }
+    #alerts-table thead { display: table-header-group; }
+    #alerts-table tbody tr { page-break-inside: avoid; }
+    #alerts-table thead th {
+      padding: 3px 2px; font-size: 8px;
+      border: 0.8px solid #000;
+    }
+    #alerts-table tbody td {
+      padding: 2px 2px; font-size: 8.5px;
+      border: 0.8px solid #000;
+    }
+    td[contenteditable] {
+      outline: none !important; background: none !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== ТУЛБАР ==================== -->
+<div class="toolbar">
+  <button class="btn-success"   onclick="loadFromGoogle()">📥 Из Google Sheets</button>
+  <button class="btn-danger"    onclick="clearTable()">🗑 Очистить</button>
+  <button class="btn-secondary" onclick="addRows(5)">＋ +5 строк</button>
+  <button class="btn-warn"      onclick="downloadHTML()">💾 Скачать HTML</button>
+  <button class="btn-primary"   onclick="window.print()">🖨 Печать / PDF (A4)</button>
+  <span class="status" id="status">Инициализация…</span>
+</div>
+
+<!-- ==================== ПАНЕЛЬ НАСТРОЕК ==================== -->
+<details class="settings-panel" open>
+  <summary>⚙ Настройки таблицы — что показывать и чем заполнять</summary>
+  <div class="settings-inner">
+    <div class="presets">
+      <button onclick="applyPreset('full')">Полная (всё видно)</button>
+      <button onclick="applyPreset('no_levels')">Без цен уровней</button>
+      <button onclick="applyPreset('no_trend')">Без тренда/волны</button>
+      <button onclick="applyPreset('empty')">Пустая (для заполнения)</button>
+      <button onclick="applyPreset('minimal')">Только тикер</button>
+      <button onclick="applyPreset('ticker_levels')">Тикер + уровни</button>
+    </div>
+    <table class="col-toggles">
+      <thead>
+        <tr>
+          <th>Колонка</th>
+          <th class="c">Показать</th>
+          <th class="c">Заполнить</th>
+        </tr>
+      </thead>
+      <tbody id="colTogglesBody"></tbody>
+    </table>
+  </div>
+</details>
+
+<!-- ==================== ЗАГОЛОВОК ПЕЧАТИ ==================== -->
+<div class="print-header">
+  ОПОВЕЩЕНИЯ ПО УРОВНЯМ — <span id="printDate"></span>
+  <div class="sub">Источник: <span id="printSource">—</span></div>
+</div>
+
+<!-- ==================== ТАБЛИЦА ==================== -->
+<div class="table-wrapper">
+  <table id="alerts-table">
+    <thead><tr id="theadRow"></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<!-- ==================== ХРАНИЛИЩЕ СОСТОЯНИЯ ==================== -->
+<script id="saved-state" type="application/json">null</script>
+
+<script>
+/* ============================================================
+   ВХОДНЫЕ ДАННЫЕ ОТ PYTHON-ОБЁРТКИ
+   ============================================================ */
+const INJECT = /*__INJECT_ALERTS__*/null;
+
+const GOOGLE_SHEETS_CSV =
+  "https://docs.google.com/spreadsheets/d/e/" +
+  "2PACX-1vRKISFld2M8tFEEE1o1Fo5nQgHP6qMmOFu57JDmi-t-Y4Xj67N5SQP9uQ02JW2Ixyd663zewMYY1hfx" +
+  "/pub?output=csv";
+
+/* ============================================================
+   ★ НОРМАЛИЗАЦИЯ: NaN / None / #N/A → ""
+   ============================================================ */
+const EMPTY_PATTERNS = new Set([
+  "", "nan", "null", "none", "nat", "undefined",
+  "inf", "-inf", "infinity", "-infinity", "<na>",
+  "#n/a", "#div/0!", "#value!", "#ref!", "#name?", "#num!", "#null!",
+]);
+
+function cleanCell(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "number") {
+    if (!isFinite(v)) return "";
+    return String(v);
+  }
+  if (typeof v === "boolean") return "";
+  let s;
+  try { s = String(v).trim(); } catch (e) { return ""; }
+  if (EMPTY_PATTERNS.has(s.toLowerCase())) return "";
+  return s;
+}
+
+/* ============================================================
+   МОДЕЛЬ ДАННЫХ
+   ============================================================ */
+const COLUMNS = [
+  { key: "Тикер БА",        num: false, ck: false },
+  { key: "Категория БА",    num: false, ck: false },
+  { key: "Тренд",           num: false, ck: false },
+  { key: "Волна",           num: false, ck: false },
+  { key: "Тенденция",       num: false, ck: false },
+  { key: "ТФ уровня",       num: false, ck: false },
+  { key: "Уровень покупок", num: true,  ck: false },
+  { key: "Уровень продаж",  num: true,  ck: false },
+  { key: "Чек покупки",     num: false, ck: true  },
+  { key: "Чек продажи",     num: false, ck: true  },
+];
+
+const state = { cols: {}, rows: [] };
+
+function resetStateCols() {
+  COLUMNS.forEach(c => {
+    const cur = state.cols[c.key];
+    if (!cur || typeof cur !== "object") {
+      state.cols[c.key] = { show: true, fill: true };
+    } else {
+      if (typeof cur.show !== "boolean") cur.show = true;
+      if (typeof cur.fill !== "boolean") cur.fill = true;
+    }
+  });
+}
+resetStateCols();
+
+/* ============================================================
+   DOM
+   ============================================================ */
+const theadRow    = document.getElementById("theadRow");
+const tbody       = document.getElementById("tbody");
+const statusEl    = document.getElementById("status");
+const togglesBody = document.getElementById("colTogglesBody");
+
+function setStatus(msg) { statusEl.textContent = msg; }
+
+/* ============================================================
+   РЕНДЕР ТАБЛИЦЫ
+   ============================================================ */
+function render() {
+  /* --- шапка --- */
+  theadRow.innerHTML = "";
+  const thNum = document.createElement("th");
+  thNum.textContent = "#";
+  thNum.style.width = "3%";
+  theadRow.appendChild(thNum);
+
+  const visibleCols = COLUMNS.filter(c => state.cols[c.key].show);
+  visibleCols.forEach(c => {
+    const th = document.createElement("th");
+    th.textContent = c.key;
+    if (c.num) th.classList.add("num");
+    if (c.ck)  th.classList.add("ck");
+    theadRow.appendChild(th);
+  });
+
+  /* --- тело --- */
+  tbody.innerHTML = "";
+  state.rows.forEach((row, i) => {
+    const tr = document.createElement("tr");
+
+    const tdNum = document.createElement("td");
+    tdNum.className = "num row-index";
+    tdNum.textContent = i + 1;
+    tr.appendChild(tdNum);
+
+    visibleCols.forEach(c => {
+      const td = document.createElement("td");
+      td.contentEditable = "true";
+      td.dataset.col = c.key;
+      td.dataset.rowIdx = i;
+      if (c.num) td.classList.add("num");
+      if (c.ck)  td.classList.add("ck");
+
+      const cfg = state.cols[c.key];
+      let val = "";
+      if (row.edits[c.key] != null) {
+        val = cleanCell(row.edits[c.key]);
+      } else if (cfg.fill) {
+        val = cleanCell(row.data[c.key]);
+      }
+      td.textContent = val;
+
+      if (c.ck) {
+        if (val === "1" || val === "3") td.classList.add("ck-1");
+        if (val === "2" || val === "4") td.classList.add("ck-2");
+      }
+      tr.appendChild(td);
+    });
+
+    tbody.appendChild(tr);
+  });
+}
+
+/* ============================================================
+   ЧЕК-БОКСЫ ПАНЕЛИ
+   ============================================================ */
+function renderToggles() {
+  togglesBody.innerHTML = "";
+  COLUMNS.forEach(c => {
+    const tr = document.createElement("tr");
+
+    const tdName = document.createElement("td");
+    tdName.textContent = c.key;
+    tr.appendChild(tdName);
+
+    const tdShow = document.createElement("td");
+    tdShow.className = "c";
+    const cbShow = document.createElement("input");
+    cbShow.type = "checkbox";
+    cbShow.checked = state.cols[c.key].show;
+    cbShow.title = "Показывать колонку в таблице";
+    cbShow.onchange = () => {
+      state.cols[c.key].show = cbShow.checked;
+      render();
+      renderToggles();
+    };
+    tdShow.appendChild(cbShow);
+    tr.appendChild(tdShow);
+
+    const tdFill = document.createElement("td");
+    tdFill.className = "c";
+    const cbFill = document.createElement("input");
+    cbFill.type = "checkbox";
+    cbFill.checked = state.cols[c.key].fill;
+    cbFill.title = "Заполнять колонку данными (иначе — пустые ячейки)";
+    cbFill.disabled = !state.cols[c.key].show;
+    cbFill.onchange = () => {
+      state.cols[c.key].fill = cbFill.checked;
+      render();
+    };
+    tdFill.appendChild(cbFill);
+    tr.appendChild(tdFill);
+
+    togglesBody.appendChild(tr);
+  });
+}
+
+/* ============================================================
+   ПРЕСЕТЫ
+   ============================================================ */
+function applyPreset(name) {
+  const ALL = COLUMNS.map(c => c.key);
+  const resetAll = () => ALL.forEach(k => {
+    state.cols[k].show = true;
+    state.cols[k].fill = true;
+  });
+
+  switch (name) {
+    case "full": resetAll(); break;
+    case "no_levels":
+      resetAll();
+      state.cols["Уровень покупок"].fill = false;
+      state.cols["Уровень продаж"].fill = false;
+      break;
+    case "no_trend":
+      resetAll();
+      state.cols["Тренд"].show = false;
+      state.cols["Волна"].show = false;
+      state.cols["Тенденция"].show = false;
+      break;
+    case "empty":
+      resetAll();
+      ALL.forEach(k => state.cols[k].fill = false);
+      break;
+    case "minimal":
+      resetAll();
+      ALL.forEach(k => { if (k !== "Тикер БА") state.cols[k].show = false; });
+      break;
+    case "ticker_levels":
+      resetAll();
+      ALL.forEach(k => {
+        if (!["Тикер БА", "Категория БА",
+              "Уровень покупок", "Уровень продаж"].includes(k)) {
+          state.cols[k].show = false;
+        }
+      });
+      break;
+  }
+  render();
+  renderToggles();
+  setStatus("Применён пресет: " + name);
+}
+
+/* ============================================================
+   ЗАГРУЗКА ИЗ НАБОРА ЗАПИСЕЙ
+   ============================================================ */
+function loadFromRecords(records, checksMap) {
+  state.rows = [];
+
+  for (const rec of records) {
+    const data = {};
+    COLUMNS.forEach(c => { data[c.key] = cleanCell(rec[c.key]); });
+
+    const hasContent = COLUMNS.some(c => data[c.key] !== "");
+
+    const edits = {};
+    if (checksMap) {
+      const tk  = String(rec["Тикер БА"] || "").toUpperCase().trim();
+      const cat = String(rec["Категория БА"] || "").trim();
+      const ck = checksMap[`${tk}|${cat}`];
+      if (ck) {
+        const bv = cleanCell(ck.buy);
+        const sv = cleanCell(ck.sell);
+        if (bv) edits["Чек покупки"] = bv;
+        if (sv) edits["Чек продажи"] = sv;
+      }
+    }
+
+    if (!hasContent && Object.keys(edits).length === 0) continue;
+    state.rows.push({ data, edits });
+  }
+
+  if (state.rows.length === 0) {
+    for (let i = 0; i < 15; i++) state.rows.push({ data: {}, edits: {} });
+    setStatus("Данные пусты — добавлены 15 пустых строк");
+  } else {
+    setStatus(`Загружено ${state.rows.length} строк`);
+  }
+  render();
+  renderToggles();
+}
+
+/* ============================================================
+   ЗАГРУЗКА ИЗ GOOGLE SHEETS
+   ============================================================ */
+async function loadFromGoogle() {
+  setStatus("Загрузка из Google Sheets…");
+  try {
+    const resp = await fetch(GOOGLE_SHEETS_CSV, { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const text = await resp.text();
+    const rows = parseCSV(text);
+    if (!rows.length || rows.length < 2) throw new Error("Пустой лист");
+
+    const headers = rows[0].map(h => (h || "").trim());
+    const idx = {};
+    COLUMNS.forEach(c => { idx[c.key] = findColIdx(headers, c.key); });
+
+    const records = [];
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
+      const rec = {};
+      COLUMNS.forEach(c => {
+        const i = idx[c.key];
+        rec[c.key] = i >= 0 ? cleanCell(row[i]) : "";
+      });
+      if (COLUMNS.every(c => rec[c.key] === "")) continue;
+      records.push(rec);
+    }
+
+    loadFromRecords(records, INJECT ? INJECT.checks : null);
+    document.getElementById("printSource").textContent =
+      "Google Sheets (прямая загрузка)";
+  } catch (e) {
+    console.error(e);
+    setStatus("Ошибка загрузки: " + e.message + " — можно заполнить вручную");
+    if (state.rows.length === 0) {
+      for (let i = 0; i < 15; i++) state.rows.push({ data: {}, edits: {} });
+      render();
+      renderToggles();
+    }
+  }
+}
+
+/* ============================================================
+   CSV-ПАРСЕР
+   ============================================================ */
+function parseCSV(text) {
+  const rows = []; let row = []; let field = ""; let inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (text[i+1] === '"') { field += '"'; i++; } else inQ = false;
+      } else field += ch;
+    } else {
+      if (ch === '"') inQ = true;
+      else if (ch === ',') { row.push(field); field = ""; }
+      else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (ch !== '\r') field += ch;
+    }
+  }
+  if (field !== "" || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function findColIdx(headers, target) {
+  const norm = s => s.toLowerCase().replace(/ё/g, "е")
+                     .replace(/\s+/g, " ").trim();
+  const t = norm(target);
+  for (let i = 0; i < headers.length; i++)
+    if (norm(headers[i]) === t) return i;
+  for (let i = 0; i < headers.length; i++) {
+    const h = norm(headers[i]);
+    if (h && (h.includes(t) || t.includes(h))) return i;
+  }
+  return -1;
+}
+
+/* ============================================================
+   РЕДАКТИРОВАНИЕ ЯЧЕЕК
+   ============================================================ */
+tbody.addEventListener("input", e => {
+  const td = e.target;
+  if (!td.dataset.col) return;
+  const i   = parseInt(td.dataset.rowIdx, 10);
+  const col = td.dataset.col;
+  if (!state.rows[i]) return;
+
+  const val = td.textContent;
+  state.rows[i].edits[col] = val;
+
+  if (col === "Чек покупки" || col === "Чек продажи") {
+    td.classList.remove("ck-1", "ck-2");
+    if (val === "1" || val === "3") td.classList.add("ck-1");
+    if (val === "2" || val === "4") td.classList.add("ck-2");
+  }
+});
+
+/* ============================================================
+   ВСТАВКА ИЗ БУФЕРА (одиночная / многоклеточная)
+   ============================================================ */
+tbody.addEventListener("paste", e => {
+  const td = e.target;
+  if (!td.dataset.col) return;
+  const text = (e.clipboardData || window.clipboardData).getData("text");
+  if (!text) return;
+
+  const rowsText = text.replace(/\r/g, "").split("\n").filter(r => r !== "");
+  const firstRowCells = rowsText[0].split("\t");
+
+  /* --- одиночная --- */
+  if (rowsText.length === 1 && firstRowCells.length === 1) {
+    e.preventDefault();
+    td.textContent = cleanCell(text);
+    td.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+
+  /* --- многоклеточная --- */
+  e.preventDefault();
+  const startRow = parseInt(td.dataset.rowIdx, 10);
+  const visibleCols = COLUMNS.filter(c => state.cols[c.key].show);
+  const startColIdx = visibleCols.findIndex(c => c.key === td.dataset.col);
+  if (startColIdx < 0) return;
+
+  rowsText.forEach((rowText, rOff) => {
+    const cells = rowText.split("\t");
+    const rowIdx = startRow + rOff;
+    if (rowIdx >= state.rows.length) {
+      state.rows.push({ data: {}, edits: {} });
+    }
+    cells.forEach((cellText, cOff) => {
+      const colIdx = startColIdx + cOff;
+      if (colIdx >= visibleCols.length) return;
+      const colKey = visibleCols[colIdx].key;
+      state.rows[rowIdx].edits[colKey] = cleanCell(cellText);
+    });
+  });
+  render();
+});
+
+/* ============================================================
+   ТУЛБАР: ДЕЙСТВИЯ
+   ============================================================ */
+function addRows(n) {
+  for (let i = 0; i < n; i++) state.rows.push({ data: {}, edits: {} });
+  render();
+  setStatus(`Добавлено ${n} пустых строк`);
+}
+
+function clearTable() {
+  if (!confirm("Очистить таблицу? Введённые данные будут потеряны.")) return;
+  state.rows = [];
+  for (let i = 0; i < 15; i++) state.rows.push({ data: {}, edits: {} });
+  render();
+  setStatus("Таблица очищена — заполните вручную");
+  document.getElementById("printSource").textContent = "ручное заполнение";
+}
+
+/* ============================================================
+   СКАЧИВАНИЕ HTML С СОСТОЯНИЕМ
+   ============================================================ */
+function downloadHTML() {
+  /* ★ Чистим данные перед сохранением */
+  const cleanState = {
+    cols: state.cols,
+    rows: state.rows.map(r => ({
+      data: Object.fromEntries(
+        Object.entries(r.data || {}).map(([k, v]) => [k, cleanCell(v)])),
+      edits: Object.fromEntries(
+        Object.entries(r.edits || {}).map(([k, v]) => [k, cleanCell(v)])),
+    })),
+  };
+
+  /* ★ Экранируем <, >, & — чтобы JSON не сломал <script> */
+  const safeJson = JSON.stringify(cleanState)
+    .replace(/</g, "\\u003C")
+    .replace(/>/g, "\\u003E")
+    .replace(/&/g, "\\u0026");
+
+  document.getElementById("saved-state").textContent = safeJson;
+
+  /* Снимаем снапшот всего документа */
+  const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url;
+  a.download = "alerts_print_" + new Date().toISOString().slice(0, 10) + ".html";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  setStatus("HTML скачан — при открытии восстановятся и данные, и настройки");
+}
+
+/* ============================================================
+   ДАТА ПЕЧАТИ
+   ============================================================ */
+function setPrintDate() {
+  const d = new Date();
+  document.getElementById("printDate").textContent =
+    d.toLocaleDateString("ru-RU") + " " +
+    d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+window.addEventListener("beforeprint", setPrintDate);
+
+/* ============================================================
+   ИНИЦИАЛИЗАЦИЯ
+   ============================================================ */
+function init() {
+  setPrintDate();
+
+  /* --- 1. Восстановление из скачанного HTML --- */
+  const savedEl = document.getElementById("saved-state");
+  if (savedEl) {
+    const txt = (savedEl.textContent || "").trim();
+    if (txt && txt !== "null") {
+      try {
+        const parsed = JSON.parse(txt);
+        if (parsed && parsed.cols && Array.isArray(parsed.rows)) {
+          state.cols = parsed.cols;
+          state.rows = parsed.rows.map(r => ({
+            data: Object.fromEntries(
+              Object.entries(r.data || {}).map(([k, v]) => [k, cleanCell(v)])),
+            edits: Object.fromEntries(
+              Object.entries(r.edits || {}).map(([k, v]) => [k, cleanCell(v)])),
+          }));
+          resetStateCols();
+          render();
+          renderToggles();
+          document.getElementById("printSource").textContent = "сохранено локально";
+          setStatus("Содержимое и настройки восстановлены из скачанного HTML");
+          return;
+        }
+      } catch (e) { /* fall through */ }
+    }
+  }
+
+  /* --- 2. INJECT от Python-обёртки --- */
+  if (INJECT && Array.isArray(INJECT.alerts) && INJECT.alerts.length > 0) {
+    loadFromRecords(INJECT.alerts, INJECT.checks);
+    document.getElementById("printSource").textContent =
+      "session_state (" + (INJECT.source || "app.py") + ")";
+    return;
+  }
+
+  /* --- 3. Прямая загрузка из Google Sheets --- */
+  loadFromGoogle();
+}
+
+init();
+</script>
+</body>
+</html>

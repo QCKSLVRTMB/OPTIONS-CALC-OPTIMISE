@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  * { box-sizing: border-box; font-family: 'Segoe UI','Inter',system-ui,sans-serif; }
+  body { background: #eef2f5; margin: 0; padding: 12px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 .2rem; color: #1a3b4f; }
+  .sub { color: #4a6f8a; margin-bottom: 16px; border-left: 4px solid #2c7da0;
+         padding-left: 14px; font-size: .85rem; }
+  .market-panel { background: white; border-radius: 20px; padding: 12px 18px;
+                  margin-bottom: 14px; border: 1px solid #e2edf4;
+                  display: flex; align-items: center; gap: 18px; }
+  .market-panel .label { font-size: .72rem; font-weight: 700; color: #2c506d;
+                         text-transform: uppercase; letter-spacing: .04em; }
+  .market-panel .value { font-size: 1.4rem; font-weight: 800; color: #1e5a7a;
+                         line-height: 1.1; }
+  .market-panel .source { font-size: .72rem; color: #7f9bb3; margin-left: auto; }
+  .model-panel { background: white; border-radius: 20px; padding: 12px 18px;
+                 margin-bottom: 14px; border: 1px solid #e2edf4;
+                 display: flex; gap: 18px; align-items: center; }
+  .model-panel label { margin: 0; font-size: .75rem; }
+  .model-panel select { max-width: 300px; }
+  .two-columns { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }
+  .panel { flex: 1; min-width: 320px; background: white; border-radius: 20px;
+           box-shadow: 0 10px 25px -8px rgba(0,0,0,.08); overflow: hidden; }
+  .panel-buy .panel-header { background: #9c00ff; }
+  .panel-sell .panel-header { background: #fb92f0; }
+  .panel-header { color: white; padding: 8px 18px; font-size: .92rem;
+                  font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .panel-body { padding: 14px 18px; }
+  .form-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;
+              align-items: flex-end; }
+  .form-group { flex: 1; min-width: 120px; }
+  label { font-size: .68rem; text-transform: uppercase; font-weight: 700;
+          color: #2c506d; margin-bottom: 4px; display: block; }
+  input, select, button { width: 100%; padding: 8px 12px; border-radius: 14px;
+                          border: 1px solid #cfdfe9; background: #fff;
+                          font-size: .85rem; }
+  button { background: #1e5a7a; color: white; font-weight: 600; border: none;
+           cursor: pointer; }
+  button:hover { background: #0f425c; }
+  .btn-secondary { background: #eef2f7; color: #1f3e54; border: 1px solid #cbdde8; }
+  input.input-error { color: #d32f2f !important; border-color: #d32f2f !important;
+                      background: #fdecec !important; }
+  .validation-msg { color: #d32f2f; font-size: .72rem; margin: -4px 0 8px 0;
+                    display: none; }
+  .validation-msg.show { display: block; }
+  .expiry-source { font-size: .68rem; color: #2c7da0; margin-top: 2px;
+                   min-height: 12px; }
+  .board-price-hint { font-size: .72rem; color: #1c5a7a; margin-top: 4px;
+                      font-weight: 600; min-height: 14px; }
+  #strikeBuy, #strikeSell { font-weight: 700; }
+  .result-block { margin-top: 10px; border-radius: 14px; padding: 12px 14px;
+                  border: 1px solid #e2edf4; }
+  .panel-buy .result-block { background: #f9f3ff; }
+  .panel-sell .result-block { background: #fff3fe; }
+  .price-value { font-size: 1.5rem; font-weight: 700; }
+  .panel-buy .price-value { color: #5c0099; }
+  .panel-sell .price-value { color: #a3139e; }
+  .breakeven { margin-top: 5px; font-size: .8rem; color: #4a6f8a;
+               background: #eef6fb; border-radius: 10px; padding: 4px 10px;
+               display: inline-block; }
+  .breakeven b { color: #1c5a7a; }
+  .greeks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .greek { background: white; border-radius: 20px; padding: 4px 10px;
+           border: 1px solid #dee9f0; font-size: .74rem; }
+  .buttons-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .buttons-row button { width: auto; padding: 9px 20px; }
+  .spread-panel { background: #f9fbfd; border-radius: 18px; padding: 14px 20px;
+                  border: 1px solid #e2edf4; margin-bottom: 14px; }
+  .spread-panel .price-value { color: #1c5a7a; }
+  .badge { background: #eef3fc; border-radius: 30px; padding: 3px 10px;
+           font-size: .7rem; display: inline-block; margin-top: 4px; }
+  .card-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 12px;
+                padding-bottom: 6px; border-bottom: 2px solid #e6edf4;
+                color: #1a3b4f; }
+
+  /* ============================================================
+     PATCH 6: Более строгая геометрия без изменения существующих
+     цветов. Адаптивность для калькулятора внутри iframe.
+     ============================================================ */
+  .market-panel,
+  .model-panel,
+  .panel,
+  .spread-panel {
+    border-radius: 8px;
+  }
+
+  .panel {
+    flex: 1 1 340px;
+    min-width: 0;
+    border: 1px solid #e2edf4;
+    box-shadow: none;
+  }
+
+  .result-block,
+  input,
+  select,
+  button,
+  .breakeven {
+    border-radius: 6px;
+  }
+
+  .greek,
+  .badge {
+    border-radius: 5px;
+  }
+
+  .form-group {
+    min-width: 0;
+  }
+
+  input,
+  select {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .price-value,
+  .market-panel .value,
+  input {
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 720px) {
+    body {
+      padding: 8px;
+    }
+
+    .container {
+      width: 100%;
+      min-width: 0;
+    }
+
+    h1 {
+      font-size: 1.15rem;
+      line-height: 1.3;
+    }
+
+    .sub {
+      margin-bottom: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .two-columns {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .panel {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .panel-header {
+      padding: 10px 12px;
+    }
+
+    .panel-body {
+      padding: 12px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+
+    .form-group {
+      width: 100%;
+      min-width: 0;
+    }
+
+    input,
+    select,
+    button {
+      min-height: 44px;
+      font-size: 16px;
+      padding: 10px;
+    }
+
+    .market-panel {
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      padding: 12px;
+    }
+
+    .market-panel .source {
+      flex-basis: 100%;
+      margin-left: 0;
+    }
+
+    .model-panel {
+      display: block;
+      padding: 12px;
+    }
+
+    .model-panel select {
+      width: 100%;
+      max-width: none;
+    }
+
+    .buttons-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+    }
+
+    .buttons-row button {
+      width: 100%;
+      margin: 0;
+    }
+
+    .spread-panel {
+      padding: 12px;
+    }
+
+    .greeks {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .greek {
+      padding: 7px 9px;
+    }
+
+    .board-price-hint,
+    .expiry-source,
+    .badge {
+      overflow-wrap: anywhere;
+    }
+  }
+
+  @media (max-width: 360px) {
+    .form-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Калькулятор опционов QCKSLVR TRADING</h1>
+  <div class="sub">https://vk.ru/qckslvrtrading</div>
+
+  <!-- Рыночная цена БА (заполняется из Python через __INJECT__) -->
+  <div id="marketPricePanel" class="market-panel" style="display:none;">
+    <div>
+      <div class="label">Рыночная цена БА (CLOSE D1)</div>
+      <div class="value" id="marketPrice">— ₽</div>
+    </div>
+    <div class="source" id="marketPriceSource"></div>
+  </div>
+
+  <div class="model-panel">
+    <div>
+      <label>Модель расчёта (общая)</label>
+      <select id="pricingModel">
+        <option value="bs">Black‑Scholes (европейский)</option>
+        <option value="binom">Биномиальная (американский)</option>
+      </select>
+    </div>
+    <div style="font-size:.7rem; color:#5f7f9e; font-style:italic; margin-top:10px;">
+      BS — для европейских опционов; биномиальная — для американских.
+    </div>
+  </div>
+
+  <div class="two-columns">
+    <div class="panel panel-buy">
+      <div class="panel-header">Уровень покупок</div>
+      <div class="panel-body">
+        <div class="form-row">
+          <div class="form-group"><label>Тип опциона</label>
+            <select id="optionTypeBuy"><option value="call">Call</option><option value="put">Put</option></select></div>
+          <div class="form-group"><label>Страйк</label>
+            <select id="strikeBuy"><option value="0">Загрузка…</option></select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Уровень (цена БА)</label>
+            <input type="number" id="priceBuy" value="0" step="0.1"></div>
+          <div class="form-group"><label>Дата</label>
+            <input type="date" id="currentDateBuy"></div>
+        </div>
+        <div class="validation-msg" id="dateValidationBuy">Дата изменена</div>
+        <div class="form-row">
+          <div class="form-group"><label>Дата исполнения</label>
+            <input type="date" id="expiryDateBuy">
+            <div class="expiry-source" id="expirySourceBuy"></div>
+            <div class="board-price-hint" id="boardPriceHintBuy"></div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Безрисковая ставка %</label>
+            <input type="number" id="riskFreeBuy" value="0" step="0.0001"></div>
+          <div class="form-group"><label>Волатильность %</label>
+            <input type="number" id="volatilityBuy" value="30" step="0.1"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Дивидендная доходность %</label>
+            <input type="number" id="dividendBuy" value="0" step="0.0001"></div>
+        </div>
+        <div class="result-block">
+          <div class="price-value" id="priceBuyResult">— ₽</div>
+          <div class="breakeven">Точка безубыточности: <b id="beBuy">— ₽</b></div>
+          <div class="greeks" id="greeksBuy"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel panel-sell">
+      <div class="panel-header">Уровень продаж</div>
+      <div class="panel-body">
+        <div class="form-row">
+          <div class="form-group"><label>Тип опциона</label>
+            <select id="optionTypeSell"><option value="call">Call</option><option value="put">Put</option></select></div>
+          <div class="form-group"><label>Страйк</label>
+            <select id="strikeSell"><option value="0">Загрузка…</option></select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Уровень (цена БА)</label>
+            <input type="number" id="priceSell" value="0" step="0.1"></div>
+          <div class="form-group"><label>Дата</label>
+            <input type="date" id="currentDateSell"></div>
+        </div>
+        <div class="validation-msg" id="dateValidationSell">Дата изменена</div>
+        <div class="form-row">
+          <div class="form-group"><label>Дата исполнения</label>
+            <input type="date" id="expiryDateSell">
+            <div class="expiry-source" id="expirySourceSell"></div>
+            <div class="board-price-hint" id="boardPriceHintSell"></div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Безрисковая ставка %</label>
+            <input type="number" id="riskFreeSell" value="0" step="0.0001"></div>
+          <div class="form-group"><label>Волатильность %</label>
+            <input type="number" id="volatilitySell" value="30" step="0.1"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Дивидендная доходность %</label>
+            <input type="number" id="dividendSell" value="0" step="0.0001"></div>
+        </div>
+        <div class="result-block">
+          <div class="price-value" id="priceSellResult">— ₽</div>
+          <div class="breakeven">Точка безубыточности: <b id="beSell">— ₽</b></div>
+          <div class="greeks" id="greeksSell"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="buttons-row">
+    <button id="resetBtn" class="btn-secondary">Сброс</button>
+    <button id="importCsvBtn" class="btn-secondary">Импорт из CSV</button>
+    <input type="file" id="importCsvInput" accept=".csv" style="display:none;">
+    <button id="exportCsvBtn">Экспорт отчёта (CSV)</button>
+  </div>
+
+  <div class="spread-panel">
+    <div class="card-title">Прибыль / Убыток</div>
+    <div class="price-value" id="spreadResult">— ₽</div>
+    <div id="recommendMsg" class="badge"></div>
+  </div>
+</div>
+
+<script>
+  // ============================================================
+  // INJECTION — данные приходят из Python как JSON
+  // ============================================================
+  const __INJECT__ = /*__INJECT_PLACEHOLDER__*/{};
+
+  const COLOR_ATM = '#1e88e5';
+  const COLOR_ITM = '#2e7d32';
+  const COLOR_OTM = '#d32f2f';
+  const COLOR_NEUTRAL = '#333333';
+
+  function normCDF(x){
+    const t=1/(1+0.2316419*Math.abs(x));
+    const d=0.3989423*Math.exp(-x*x/2);
+    const p=d*t*(0.3193815+t*(-0.3565638+t*(1.781478+t*(-1.821256+t*1.330274))));
+    return x>0?1-p:p;
+  }
+  function blackScholes(spot,strike,T,rate,vol,div,type){
+    if(T<=0||!isFinite(spot)||!isFinite(strike)||strike<=0||vol<=0)
+      return (type==='call'?Math.max(0,spot-strike):Math.max(0,strike-spot));
+    const r=rate/100,q=div/100,sigma=vol/100;
+    const d1=(Math.log(spot/strike)+(r-q+sigma*sigma/2)*T)/(sigma*Math.sqrt(T));
+    const d2=d1-sigma*Math.sqrt(T);
+    if(type==='call') return spot*Math.exp(-q*T)*normCDF(d1)-strike*Math.exp(-r*T)*normCDF(d2);
+    return strike*Math.exp(-r*T)*normCDF(-d2)-spot*Math.exp(-q*T)*normCDF(-d1);
+  }
+  function binomialAmerican(spot,strike,T,rate,vol,div,type,steps=200){
+    if(T<=0||!isFinite(spot)||!isFinite(strike)||strike<=0||vol<=0)
+      return (type==='call'?Math.max(0,spot-strike):Math.max(0,strike-spot));
+    const r=rate/100,q=div/100,sigma=vol/100;
+    const dt=T/steps;
+    const u=Math.exp(sigma*Math.sqrt(dt));
+    const d=1/u;
+    const p=(Math.exp((r-q)*dt)-d)/(u-d);
+    const disc=Math.exp(-r*dt);
+    const values=Array(steps+1);
+    for(let i=0;i<=steps;i++){
+      const sT=spot*Math.pow(u,steps-i)*Math.pow(d,i);
+      values[i]=type==='call'?Math.max(0,sT-strike):Math.max(0,strike-sT);
+    }
+    for(let step=steps-1;step>=0;step--){
+      for(let i=0;i<=step;i++){
+        const hold=disc*(p*values[i]+(1-p)*values[i+1]);
+        const nodeP=spot*Math.pow(u,step-i)*Math.pow(d,i);
+        const exer=type==='call'?Math.max(0,nodeP-strike):Math.max(0,strike-nodeP);
+        values[i]=Math.max(hold,exer);
+      }
+    }
+    return values[0];
+  }
+  function calcGreeks(spot,strike,T,rate,vol,div,type){
+    if(T<=1e-6||!isFinite(spot)||!isFinite(strike)||strike<=0||vol<=0)
+      return{delta:'—',gamma:'—',theta:'—',vega:'—'};
+    const r=rate/100,q=div/100,sigma=vol/100;
+    const sqrtT=Math.sqrt(T);
+    const d1=(Math.log(spot/strike)+(r-q+sigma*sigma/2)*T)/(sigma*sqrtT);
+    const d2=d1-sigma*sqrtT;
+    const nd1=normCDF(d1);
+    const pdf=Math.exp(-d1*d1/2)/Math.sqrt(2*Math.PI);
+    const delta=type==='call'?Math.exp(-q*T)*nd1:Math.exp(-q*T)*(nd1-1);
+    const gamma=pdf*Math.exp(-q*T)/(spot*sigma*sqrtT);
+    const vega=spot*pdf*Math.exp(-q*T)*sqrtT/100;
+    const thetaCall=-spot*pdf*sigma*Math.exp(-q*T)/(2*sqrtT)-r*strike*Math.exp(-r*T)*normCDF(d2)+q*spot*Math.exp(-q*T)*nd1;
+    const thetaPut =-spot*pdf*sigma*Math.exp(-q*T)/(2*sqrtT)+r*strike*Math.exp(-r*T)*normCDF(-d2)-q*spot*Math.exp(-q*T)*normCDF(-d1);
+    const theta=(type==='call'?thetaCall:thetaPut)/365;
+    return{delta:delta.toFixed(3),gamma:gamma.toFixed(3),vega:vega.toFixed(2),theta:theta.toFixed(3)};
+  }
+  function getTimeYears(now,exp){
+    if(!now||!exp) return 0;
+    const t = (new Date(exp)-new Date(now))/(1000*3600*24*365);
+    return t>0?t:0;
+  }
+
+  let __strikeList = [];
+  let __centralStrike = null;
+  let __initialized = false;
+
+  function getIVForStrike(k) {
+    const item = __strikeList.find(x => String(x.strike) === String(k));
+    return item ? item.iv : null;
+  }
+  function classifyStrike(strike, central, optionType) {
+    if (central == null) return { label: '', color: COLOR_NEUTRAL };
+    const k = parseFloat(strike);
+    const c = parseFloat(central);
+    if (isNaN(k) || isNaN(c)) return { label: '', color: COLOR_NEUTRAL };
+    if (k === c) return { label: 'ATM', color: COLOR_ATM };
+    const isCall = optionType === 'call';
+    const inTheMoney = isCall ? (k < c) : (k > c);
+    return inTheMoney ? { label: 'ITM', color: COLOR_ITM } : { label: 'OTM', color: COLOR_OTM };
+  }
+  function applySelectColor(sel) {
+    if (!sel) return;
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt) return;
+    sel.style.color = opt.dataset.color || COLOR_NEUTRAL;
+  }
+  function renderStrikesFor(selectId, optionType) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    const prevVal = sel.value;
+    sel.innerHTML = '';
+    if (!__strikeList || !__strikeList.length) {
+      const opt = document.createElement('option');
+      opt.value = "0";
+      opt.textContent = "Нет страйков";
+      sel.appendChild(opt);
+      return;
+    }
+    __strikeList.forEach(s => {
+      const cls = classifyStrike(s.strike, __centralStrike, optionType);
+      const opt = document.createElement('option');
+      opt.value = s.strike;
+      opt.textContent = s.strike;
+      opt.style.color = cls.color;
+      opt.dataset.color = cls.color;
+      sel.appendChild(opt);
+    });
+    let target = null;
+    if (prevVal && __strikeList.some(x => String(x.strike) === String(prevVal))) target = prevVal;
+    else if (__centralStrike != null) target = __centralStrike;
+    else if (__strikeList.length > 0) target = __strikeList[0].strike;
+    if (target != null) sel.value = target;
+    applySelectColor(sel);
+  }
+  function renderStrikes() {
+    renderStrikesFor('strikeBuy', document.getElementById('optionTypeBuy').value);
+    renderStrikesFor('strikeSell', document.getElementById('optionTypeSell').value);
+  }
+
+  // Формат «+C270 16,7500» / «-P280 5,20»
+  function _fmtBoardPrice(optType, side, strike, price) {
+    if (price == null || !isFinite(price) || price <= 0) return '—';
+    const sign   = side === 'Buy' ? '+' : '-';
+    const letter = optType === 'call' ? 'C' : 'P';
+    const kStr   = Number.isInteger(Number(strike)) ? String(Number(strike)) : String(strike);
+    const pStr   = Number(price).toFixed(4).replace('.', ',');
+    return `${sign}${letter}${kStr} ${pStr}`;
+  }
+
+  // Подстановка страйка по правилу OTM/ITM для уровней из оповещений
+  function applyAlertStrike(suf) {
+    const at = (__INJECT__ && __INJECT__.alert_targets) || null;
+    if (!at) return;
+    const typeEl = document.getElementById('optionType' + suf);
+    const selEl  = document.getElementById('strike' + suf);
+    if (!typeEl || !selEl) return;
+    const optType = typeEl.value;
+    const mapKey  = (suf === 'Buy') ? 'strikes_buy' : 'strikes_sell';
+    const targets = at[mapKey] || {};
+    const target  = targets[optType];
+    if (target == null) return;
+    const opt = Array.from(selEl.options).find(o => String(o.value) === String(target));
+    if (opt) {
+      selEl.value = String(target);
+      applySelectColor(selEl);
+    }
+  }
+
+  // Показать строку «Цена из доски опционов: +C270 16,7500»
+  function renderBoardPriceHint(suf) {
+    const at = (__INJECT__ && __INJECT__.alert_targets) || null;
+    const hintEl = document.getElementById('boardPriceHint' + suf);
+    if (!hintEl) return;
+    if (!at) { hintEl.innerText = ''; return; }
+    const typeEl = document.getElementById('optionType' + suf);
+    const selEl  = document.getElementById('strike' + suf);
+    if (!typeEl || !selEl) { hintEl.innerText = ''; return; }
+    const optType = typeEl.value;
+    const strike  = selEl.value;
+    const mapKey  = (suf === 'Buy') ? 'prices_buy' : 'prices_sell';
+    const prices  = (at[mapKey] || {})[optType] || {};
+    const price   = prices[String(strike)];
+    if (price == null) { hintEl.innerText = ''; return; }
+    const side = suf === 'Buy' ? 'Buy' : 'Sell';
+    hintEl.innerText = 'Цена из доски опционов: '
+      + _fmtBoardPrice(optType, side, strike, Number(price));
+  }
+
+  function validateDateField(fieldId, msgId) {
+    const el = document.getElementById(fieldId);
+    const msgEl = document.getElementById(msgId);
+    if (!el || !msgEl) return true;
+    const today = new Date().toISOString().slice(0, 10);
+    const invalid = el.value !== today;
+    if (invalid && el.value) { el.classList.add('input-error'); msgEl.classList.add('show'); }
+    else { el.classList.remove('input-error'); msgEl.classList.remove('show'); }
+    return !invalid;
+  }
+  function validateCurrentDates() {
+    validateDateField('currentDateBuy', 'dateValidationBuy');
+    validateDateField('currentDateSell', 'dateValidationSell');
+  }
+
+  let __syncTimeout = null;
+  function syncToParent() {
+    if (!__initialized) return;
+    if (__syncTimeout) clearTimeout(__syncTimeout);
+    __syncTimeout = setTimeout(() => {
+      try {
+        const get = id => document.getElementById(id)?.value || '';
+        const params = {
+          level_buy: parseFloat(get('priceBuy')) || 0,
+          level_sell: parseFloat(get('priceSell')) || 0,
+          rf_buy:  parseFloat(get('riskFreeBuy')) || 0,
+          rf_sell: parseFloat(get('riskFreeSell')) || 0,
+          vol_buy: parseFloat(get('volatilityBuy')) || 0,
+          vol_sell: parseFloat(get('volatilitySell')) || 0,
+          div_buy: parseFloat(get('dividendBuy')) || 0,
+          div_sell: parseFloat(get('dividendSell')) || 0,
+        };
+        const pUrl = new URL(window.parent.location.href);
+        let changed = false;
+        for (const k in params) {
+          if (pUrl.searchParams.get(k) !== String(params[k])) {
+            pUrl.searchParams.set(k, String(params[k]));
+            changed = true;
+          }
+        }
+        if (changed) window.parent.history.replaceState({}, '', pUrl.toString());
+      } catch (e) {}
+    }, 600);
+  }
+
+  function updatePrices(){
+    validateCurrentDates();
+    const model = document.getElementById('pricingModel').value;
+
+    // ---- Покупка ----
+    const typeBuy = document.getElementById('optionTypeBuy').value;
+    const KBuy = parseFloat(document.getElementById('strikeBuy').value);
+    const SBuy = parseFloat(document.getElementById('priceBuy').value);
+    const expBuy = document.getElementById('expiryDateBuy').value;
+    const dateBuy = document.getElementById('currentDateBuy').value;
+    const rBuy = parseFloat(document.getElementById('riskFreeBuy').value) || 0;
+    const volBuy = parseFloat(document.getElementById('volatilityBuy').value) || 0;
+    const divBuy = parseFloat(document.getElementById('dividendBuy').value) || 0;
+
+    let priceBuy = NaN;
+    if (expBuy && !isNaN(KBuy) && KBuy > 0 && !isNaN(SBuy) && SBuy > 0) {
+      const T = getTimeYears(dateBuy, expBuy);
+      priceBuy = (model === 'bs')
+        ? blackScholes(SBuy, KBuy, T, rBuy, volBuy, divBuy, typeBuy)
+        : binomialAmerican(SBuy, KBuy, T, rBuy, volBuy, divBuy, typeBuy);
+    }
+    document.getElementById('priceBuyResult').innerHTML =
+      isFinite(priceBuy) ? priceBuy.toFixed(2) + ' ₽' : '— ₽';
+    let beBuy = NaN;
+    if (isFinite(priceBuy) && !isNaN(KBuy)) {
+      beBuy = typeBuy === 'call' ? KBuy + priceBuy : KBuy - priceBuy;
+    }
+    document.getElementById('beBuy').innerText = isFinite(beBuy) ? beBuy.toFixed(2) + ' ₽' : '— ₽';
+
+    const gB = (expBuy && !isNaN(KBuy) && KBuy > 0)
+      ? calcGreeks(SBuy, KBuy, getTimeYears(dateBuy, expBuy), rBuy, volBuy, divBuy, typeBuy)
+      : {delta:'—',gamma:'—',theta:'—',vega:'—'};
+    document.getElementById('greeksBuy').innerHTML =
+      `<div class="greek">Δ ${gB.delta}</div><div class="greek">Γ ${gB.gamma}</div>` +
+      `<div class="greek">Θ ${gB.theta}</div><div class="greek">ν ${gB.vega}</div>`;
+
+    // ---- Продажа ----
+    const typeSell = document.getElementById('optionTypeSell').value;
+    const KSell = parseFloat(document.getElementById('strikeSell').value);
+    const SSell = parseFloat(document.getElementById('priceSell').value);
+    const expSell = document.getElementById('expiryDateSell').value;
+    const dateSell = document.getElementById('currentDateSell').value;
+    const rSell = parseFloat(document.getElementById('riskFreeSell').value) || 0;
+    const volSell = parseFloat(document.getElementById('volatilitySell').value) || 0;
+    const divSell = parseFloat(document.getElementById('dividendSell').value) || 0;
+
+    let priceSell = NaN;
+    if (expSell && !isNaN(KSell) && KSell > 0 && !isNaN(SSell) && SSell > 0) {
+      const T = getTimeYears(dateSell, expSell);
+      priceSell = (model === 'bs')
+        ? blackScholes(SSell, KSell, T, rSell, volSell, divSell, typeSell)
+        : binomialAmerican(SSell, KSell, T, rSell, volSell, divSell, typeSell);
+    }
+    document.getElementById('priceSellResult').innerHTML =
+      isFinite(priceSell) ? priceSell.toFixed(2) + ' ₽' : '— ₽';
+    let beSell = NaN;
+    if (isFinite(priceSell) && !isNaN(KSell)) {
+      beSell = typeSell === 'call' ? KSell + priceSell : KSell - priceSell;
+    }
+    document.getElementById('beSell').innerText = isFinite(beSell) ? beSell.toFixed(2) + ' ₽' : '— ₽';
+
+    const gS = (expSell && !isNaN(KSell) && KSell > 0)
+      ? calcGreeks(SSell, KSell, getTimeYears(dateSell, expSell), rSell, volSell, divSell, typeSell)
+      : {delta:'—',gamma:'—',theta:'—',vega:'—'};
+    document.getElementById('greeksSell').innerHTML =
+      `<div class="greek">Δ ${gS.delta}</div><div class="greek">Γ ${gS.gamma}</div>` +
+      `<div class="greek">Θ ${gS.theta}</div><div class="greek">ν ${gS.vega}</div>`;
+
+    const spread = (isFinite(priceSell) && isFinite(priceBuy)) ? priceSell - priceBuy : NaN;
+    document.getElementById('spreadResult').innerHTML =
+      isFinite(spread) ? spread.toFixed(2) + ' ₽' : '— ₽';
+    const intrinsic = Math.max(0, (isFinite(SSell) && !isNaN(KSell)) ? SSell - KSell : 0);
+    document.getElementById('recommendMsg').innerHTML = isFinite(priceSell)
+      ? `Внутренняя стоимость: ${intrinsic.toFixed(2)} ₽ · Спред: ${isFinite(spread) ? spread.toFixed(2) : '—'} ₽`
+      : '';
+  }
+
+  function saveSettings(){
+    const data = {
+      model: document.getElementById('pricingModel').value,
+      optionTypeBuy: document.getElementById('optionTypeBuy').value,
+      priceBuy: document.getElementById('priceBuy').value,
+      currentDateBuy: document.getElementById('currentDateBuy').value,
+      riskFreeBuy: document.getElementById('riskFreeBuy').value,
+      volatilityBuy: document.getElementById('volatilityBuy').value,
+      dividendBuy: document.getElementById('dividendBuy').value,
+      optionTypeSell: document.getElementById('optionTypeSell').value,
+      priceSell: document.getElementById('priceSell').value,
+      currentDateSell: document.getElementById('currentDateSell').value,
+      riskFreeSell: document.getElementById('riskFreeSell').value,
+      volatilitySell: document.getElementById('volatilitySell').value,
+      dividendSell: document.getElementById('dividendSell').value,
+    };
+    try { localStorage.setItem('optionCalcSettings_v5', JSON.stringify(data)); } catch(e){}
+  }
+  function loadSettings(){
+    let s = {};
+    try { s = JSON.parse(localStorage.getItem('optionCalcSettings_v5') || '{}'); } catch(e){ s = {}; }
+    for (const k in s) {
+      const el = document.getElementById(k);
+      if (el && s[k] !== undefined) el.value = s[k];
+    }
+  }
+
+  // ---- Экспорт CSV ----
+  function _csvEscape(v) {
+    const s = String(v ?? '');
+    if (s.includes(',') || s.includes('"') || s.includes('\n'))
+      return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+  function _csvRow(arr) { return arr.map(_csvEscape).join(','); }
+  function exportCSV(){
+    const g = id => document.getElementById(id)?.value || '';
+    const gt = id => document.getElementById(id)?.innerText || '';
+    const lines = [];
+    lines.push(_csvRow(['ОТЧЁТ КАЛЬКУЛЯТОРА ОПЦИОНОВ QCKSLVR TRADING']));
+    lines.push(_csvRow(['Дата экспорта', new Date().toISOString().slice(0,19).replace('T',' ')]));
+    lines.push('');
+    lines.push(_csvRow(['=== КАЛЬКУЛЯТОР ===']));
+    lines.push(_csvRow(['Модель', g('pricingModel')]));
+    lines.push(_csvRow(['Тип опциона покупки', g('optionTypeBuy')]));
+    lines.push(_csvRow(['Страйк покупки', g('strikeBuy')]));
+    lines.push(_csvRow(['Уровень покупок', g('priceBuy')]));
+    lines.push(_csvRow(['Экспирация покупки', g('expiryDateBuy')]));
+    lines.push(_csvRow(['Дата покупки', g('currentDateBuy')]));
+    lines.push(_csvRow(['Ставка покупки', g('riskFreeBuy')]));
+    lines.push(_csvRow(['Волатильность покупки', g('volatilityBuy')]));
+    lines.push(_csvRow(['Дивиденды покупки', g('dividendBuy')]));
+    lines.push(_csvRow(['Цена покупки (теор.)', gt('priceBuyResult')]));
+    lines.push(_csvRow(['BE покупки', gt('beBuy')]));
+    lines.push(_csvRow(['Тип опциона продажи', g('optionTypeSell')]));
+    lines.push(_csvRow(['Страйк продажи', g('strikeSell')]));
+    lines.push(_csvRow(['Уровень продаж', g('priceSell')]));
+    lines.push(_csvRow(['Экспирация продажи', g('expiryDateSell')]));
+    lines.push(_csvRow(['Дата продажи', g('currentDateSell')]));
+    lines.push(_csvRow(['Ставка продажи', g('riskFreeSell')]));
+    lines.push(_csvRow(['Волатильность продажи', g('volatilitySell')]));
+    lines.push(_csvRow(['Дивиденды продажи', g('dividendSell')]));
+    lines.push(_csvRow(['Цена продажи (теор.)', gt('priceSellResult')]));
+    lines.push(_csvRow(['BE продажи', gt('beSell')]));
+    lines.push(_csvRow(['Спред', gt('spreadResult')]));
+    const csv = lines.join('\n');
+    const blob = new Blob(['\uFEFF' + csv], {type: 'text/csv;charset=utf-8;'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const dateStr = new Date().toISOString().slice(0,16).replace(/[:T]/g, '-');
+    a.download = `calc_${dateStr}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function importCSV(file){
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const lines = e.target.result.split(/\r?\n/);
+        const map = {};
+        for (const line of lines) {
+          if (!line || line.startsWith('===') || line.startsWith('ОТЧЁТ')) continue;
+          const idx = line.indexOf(',');
+          if (idx < 0) continue;
+          map[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        }
+        const setV = (id, key) => {
+          if (map[key] !== undefined) {
+            const el = document.getElementById(id);
+            if (el) el.value = map[key];
+          }
+        };
+        setV('pricingModel', 'Модель');
+        setV('optionTypeBuy', 'Тип опциона покупки');
+        setV('priceBuy', 'Уровень покупок');
+        setV('expiryDateBuy', 'Экспирация покупки');
+        setV('currentDateBuy', 'Дата покупки');
+        setV('riskFreeBuy', 'Ставка покупки');
+        setV('volatilityBuy', 'Волатильность покупки');
+        setV('dividendBuy', 'Дивиденды покупки');
+        setV('optionTypeSell', 'Тип опциона продажи');
+        setV('priceSell', 'Уровень продаж');
+        setV('expiryDateSell', 'Экспирация продажи');
+        setV('currentDateSell', 'Дата продажи');
+        setV('riskFreeSell', 'Ставка продажи');
+        setV('volatilitySell', 'Волатильность продажи');
+        setV('dividendSell', 'Дивиденды продажи');
+        const sb = map['Страйк покупки'], ss = map['Страйк продажи'];
+        const sbEl = document.getElementById('strikeBuy');
+        if (sb !== undefined && sbEl && Array.from(sbEl.options).some(o => o.value === sb)) {
+          sbEl.value = sb; applySelectColor(sbEl);
+        }
+        const ssEl = document.getElementById('strikeSell');
+        if (ss !== undefined && ssEl && Array.from(ssEl.options).some(o => o.value === ss)) {
+          ssEl.value = ss; applySelectColor(ssEl);
+        }
+        updatePrices(); saveSettings(); syncToParent();
+      } catch (err) { alert('Ошибка импорта CSV: ' + err.message); }
+    };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  // ---- Обработчики ----
+  ['optionTypeBuy','optionTypeSell','priceBuy','priceSell',
+   'currentDateBuy','currentDateSell','expiryDateBuy','expiryDateSell',
+   'riskFreeBuy','riskFreeSell','volatilityBuy','volatilitySell',
+   'dividendBuy','dividendSell','pricingModel'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => { updatePrices(); saveSettings(); });
+  });
+  ['priceBuy','priceSell','riskFreeBuy','riskFreeSell',
+   'volatilityBuy','volatilitySell','dividendBuy','dividendSell']
+    .forEach(id => document.getElementById(id)?.addEventListener('input', syncToParent));
+
+  ['expiryDateBuy','expiryDateSell'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', function(){
+      const suf = id.endsWith('Buy') ? 'Buy' : 'Sell';
+      const srcEl = document.getElementById('expirySource'+suf);
+      if (srcEl) srcEl.innerText = 'введено вручную';
+      updatePrices(); saveSettings();
+    });
+  });
+
+  document.getElementById('optionTypeBuy').addEventListener('change', function(){
+    renderStrikesFor('strikeBuy', this.value);
+    applyAlertStrike('Buy');
+    renderBoardPriceHint('Buy');
+    updatePrices(); saveSettings();
+  });
+  document.getElementById('optionTypeSell').addEventListener('change', function(){
+    renderStrikesFor('strikeSell', this.value);
+    applyAlertStrike('Sell');
+    renderBoardPriceHint('Sell');
+    updatePrices(); saveSettings();
+  });
+  document.getElementById('strikeBuy').addEventListener('change', function(){
+    applySelectColor(this);
+    const iv = getIVForStrike(this.value);
+    if (iv != null) document.getElementById('volatilityBuy').value = iv;
+    renderBoardPriceHint('Buy');
+    updatePrices(); saveSettings();
+  });
+  document.getElementById('strikeSell').addEventListener('change', function(){
+    applySelectColor(this);
+    const iv = getIVForStrike(this.value);
+    if (iv != null) document.getElementById('volatilitySell').value = iv;
+    renderBoardPriceHint('Sell');
+    updatePrices(); saveSettings();
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    const today = new Date().toISOString().slice(0,10);
+    const exp = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+    document.getElementById('pricingModel').value = 'bs';
+    ['Buy','Sell'].forEach(suf => {
+      document.getElementById('optionType'+suf).value = 'call';
+      document.getElementById('price'+suf).value = '0';
+      document.getElementById('currentDate'+suf).value = today;
+      document.getElementById('expiryDate'+suf).value = exp;
+      document.getElementById('riskFree'+suf).value = '10';
+      document.getElementById('volatility'+suf).value = '30';
+      document.getElementById('dividend'+suf).value = '0';
+      document.getElementById('expirySource'+suf).innerText = '';
+      const hintEl = document.getElementById('boardPriceHint'+suf);
+      if (hintEl) hintEl.innerText = '';
+    });
+    if (__strikeList.length) renderStrikes();
+    updatePrices(); saveSettings(); syncToParent();
+  });
+  document.getElementById('exportCsvBtn').addEventListener('click', exportCSV);
+  document.getElementById('importCsvBtn').addEventListener('click', () => {
+    document.getElementById('importCsvInput').click();
+  });
+  document.getElementById('importCsvInput').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (f) importCSV(f);
+    e.target.value = '';
+  });
+
+  // ============================================================
+  // ИНИЦИАЛИЗАЦИЯ
+  // ============================================================
+  (function initAll(){
+    const today = new Date().toISOString().slice(0,10);
+    const defaultExp = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+
+    document.getElementById('currentDateBuy').value = today;
+    document.getElementById('currentDateSell').value = today;
+    document.getElementById('expiryDateBuy').value = defaultExp;
+    document.getElementById('expiryDateSell').value = defaultExp;
+
+    loadSettings();
+
+    const inj = __INJECT__ || {};
+
+    // 1. Страйки
+    if (Array.isArray(inj.strikes) && inj.strikes.length) {
+      __strikeList = inj.strikes.slice();
+      __centralStrike = (inj.central_strike != null) ? inj.central_strike : null;
+      renderStrikes();
+    }
+
+    // 2. Дата экспирации
+    if (inj.expiry && /^\d{4}-\d{2}-\d{2}$/.test(inj.expiry)) {
+      ['expiryDateBuy','expiryDateSell'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = inj.expiry;
+      });
+      const srcTxt = inj.series_code ? `из MOEX: серия ${inj.series_code}` : 'из MOEX';
+      ['expirySourceBuy','expirySourceSell'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = srcTxt;
+      });
+    }
+
+    // 3. Безрисковая ставка
+    if (inj.rf_buy != null) {
+      document.getElementById('riskFreeBuy').value = Number(inj.rf_buy).toFixed(4);
+    }
+    if (inj.rf_sell != null) {
+      document.getElementById('riskFreeSell').value = Number(inj.rf_sell).toFixed(4);
+    }
+
+    // 4. Дивиденды (доля, не %)
+    if (inj.div_buy != null) {
+      document.getElementById('dividendBuy').value = (Number(inj.div_buy) * 100).toFixed(4);
+    }
+    if (inj.div_sell != null) {
+      document.getElementById('dividendSell').value = (Number(inj.div_sell) * 100).toFixed(4);
+    }
+
+    // 5. Волатильность
+    if (inj.vol_buy != null) {
+      document.getElementById('volatilityBuy').value = Number(inj.vol_buy).toFixed(2);
+    } else {
+      document.getElementById('volatilityBuy').value = '30';
+    }
+    if (inj.vol_sell != null) {
+      document.getElementById('volatilitySell').value = Number(inj.vol_sell).toFixed(2);
+    } else {
+      document.getElementById('volatilitySell').value = '30';
+    }
+
+    // 6. Уровни и страйки из alert_targets
+    if (inj.alert_targets) {
+      const at = inj.alert_targets;
+      if (at.lvl_buy != null) {
+        document.getElementById('priceBuy').value = Number(at.lvl_buy).toFixed(2);
+      }
+      if (at.lvl_sell != null) {
+        document.getElementById('priceSell').value = Number(at.lvl_sell).toFixed(2);
+      }
+      applyAlertStrike('Buy');
+      applyAlertStrike('Sell');
+      renderBoardPriceHint('Buy');
+      renderBoardPriceHint('Sell');
+    } else if (inj.alerts) {
+      if (inj.alerts.buy != null) {
+        document.getElementById('priceBuy').value = Number(inj.alerts.buy).toFixed(2);
+      }
+      if (inj.alerts.sell != null) {
+        document.getElementById('priceSell').value = Number(inj.alerts.sell).toFixed(2);
+      }
+    }
+
+    // 7. Рыночная цена БА
+    if (inj.market_price != null) {
+      const _mp = Number(inj.market_price);
+      document.getElementById('marketPrice').innerText = _mp.toFixed(2) + ' ₽';
+      document.getElementById('marketPriceSource').innerText =
+        'источник: CLOSE последнего дневного бара MOEX ISS';
+      document.getElementById('marketPricePanel').style.display = 'flex';
+    }
+
+    // 8. Даты — форсируем сегодня
+    document.getElementById('currentDateBuy').value = today;
+    document.getElementById('currentDateSell').value = today;
+
+    updatePrices();
+    saveSettings();
+    __initialized = true;
+    syncToParent();
+  })();
+</script>
+</body>
+</html>
