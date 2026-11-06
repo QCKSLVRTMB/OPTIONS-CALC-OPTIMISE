@@ -1,62 +1,53 @@
 """
 check_functions.py — проверка целостности проекта.
 
-Сканирует все .py файлы проекта (app.py, config.py, core/, ui/, tabs/)
+Сканирует все .py проекта (config.py, app.py, core/, ui/, tabs/)
 и проверяет:
 
-    MISSING       — имена, использованные в Load-контексте, но не определённые
-                    ни в этом файле (def / class / локальная переменная /
-                    параметр функции), ни через import, ни builtin.
-                    Это и есть причина NameError.
+    AST-режим (по умолчанию, быстро):
+        MISSING       — имена в Load-контексте, но не определённые
+                        ни в этом файле, ни через import, ни builtin.
+        DUPLICATES    — функции с одним именем >1 раз в одном файле.
+        UNUSED        — функции без использования. Колбэки Streamlit
+                        (on_change=..., on_click=...) сюда попадают ложно —
+                        передаются как объект, а не вызываются.
 
-    DUPLICATES    — функции с более чем одним `def` в ОДНОМ файле.
-                    Python возьмёт последнее определение — редактировать
-                    такой файл опасно.
-
-    UNUSED        — функции, определённые в проекте, но не использованные
-                    ни в одном файле (потенциальный dead code).
-                    Колбэки Streamlit (on_change=...) попадают сюда ложно —
-                    они передаются как объект, а не вызываются.
+    --imports (медленно, но ловит ImportError):
+        Реально импортирует каждый модуль проекта через importlib.
+        Файлы с st.set_page_config на верхнем уровне (app.py)
+        пропускаются — их проверяйте через `streamlit run`.
 
 Использование:
-
-    python check_functions.py              # авто-сканирование всего проекта
-    python check_functions.py app.py       # проверка одного файла
-    python check_functions.py /path/to/    # указать корень проекта
+    python check_functions.py                # AST-check
+    python check_functions.py --imports      # AST + imports
+    python check_functions.py app.py         # один файл
+    python check_functions.py /path/to/      # конкретная папка
 
 Exit code:
-
-    0 — файл готов к запуску
-    1 — есть MISSING или DUPLICATES (Streamlit упадёт на вкладке)
-    2 — фатальная ошибка (файл не найден, синтаксическая ошибка)
-
-Зависимости: только стандартная библиотека (ast, sys, collections, pathlib).
+    0 — всё ок
+    1 — есть MISSING / DUPLICATES / ImportError
+    2 — фатальная ошибка (файл не найден, синтаксис)
 """
 from __future__ import annotations
 
+import argparse
 import ast
-import sys
 import collections
+import importlib
+import sys
 from pathlib import Path
 
 
 # ==================================================================
 # Настройки
 # ==================================================================
-DEFAULT_ROOT = "."
-
 IGNORE_DIRS = {
     "__pycache__", ".git", ".venv", "venv", "env",
     ".idea", ".vscode", ".mypy_cache", ".pytest_cache",
     "node_modules", ".streamlit",
 }
+IGNORE_FILES = {"check_functions.py", "setup.py"}
 
-IGNORE_FILES = {
-    "check_functions.py",  # не проверяем сам себя
-    "setup.py",
-}
-
-# Встроенные имена Python и special module attributes.
 BUILTINS = {
     # базовые
     "print", "len", "range", "int", "float", "str", "bool", "dict", "list",
@@ -90,16 +81,6 @@ BUILTINS = {
 # Разбор одного файла
 # ==================================================================
 def parse_file(path: Path) -> dict:
-    """Возвращает словарь с информацией о файле:
-        defined      — имена def / class, определённые в этом файле
-        imported     — имена, импортированные в этот файл
-        used         — имена в Load-контексте (для MISSING и UNUSED)
-        called       — имена в Call-контексте (для отчёта)
-        assigned     — имена в Store-контексте (локальные переменные)
-        params       — параметры всех функций файла
-        class_methods— методы классов (исключаются из UNUSED)
-        defs_count   — Counter имён def (для DUPLICATES)
-    """
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source)
 
@@ -124,7 +105,7 @@ def parse_file(path: Path) -> dict:
             called.add(node.func.id)
 
     imported: set[str] = set()
-    has_star_import = False
+    has_star = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -132,18 +113,15 @@ def parse_file(path: Path) -> dict:
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if alias.name == "*":
-                    has_star_import = True
+                    has_star = True
                     continue
                 imported.add(alias.asname or alias.name)
 
     params: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for arg in node.args.args:
-                params.add(arg.arg)
-            for arg in node.args.kwonlyargs:
-                params.add(arg.arg)
-            for arg in getattr(node.args, "posonlyargs", []):
+            for arg in (*node.args.args, *node.args.kwonlyargs,
+                        *getattr(node.args, "posonlyargs", [])):
                 params.add(arg.arg)
             if node.args.vararg:
                 params.add(node.args.vararg.arg)
@@ -162,6 +140,30 @@ def parse_file(path: Path) -> dict:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     )
 
+    # has_set_page_config на верхнем уровне — такие файлы пропускаем
+    # в режиме --imports (нужен Streamlit runtime).
+    top_calls_spc = False
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            if isinstance(f, ast.Attribute) and f.attr == "set_page_config":
+                top_calls_spc = True
+                break
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            f = node.value.func
+            if (isinstance(f, ast.Attribute) and f.attr == "set_page_config"):
+                top_calls_spc = True
+                break
+        # проверяем также внутри if __name__ == "__main__":
+        if isinstance(node, ast.If):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call):
+                    f = sub.func
+                    if (isinstance(f, ast.Attribute)
+                            and f.attr == "set_page_config"):
+                        top_calls_spc = True
+                        break
+
     return {
         "defined": defined,
         "imported": imported,
@@ -171,121 +173,138 @@ def parse_file(path: Path) -> dict:
         "params": params,
         "class_methods": class_methods,
         "defs_count": counts,
-        "has_star_import": has_star_import,
-        "source_lines": len(source.splitlines()),
+        "has_star": has_star,
+        "has_set_page_config": top_calls_spc,
     }
 
 
 # ==================================================================
-# Сканирование
+# Поиск файлов
 # ==================================================================
-def find_python_files(root: Path) -> list[Path]:
+def find_files(root: Path) -> list[Path]:
     if root.is_file():
         return [root]
-    files: list[Path] = []
-    for p in root.rglob("*.py"):
-        if any(part in IGNORE_DIRS for part in p.parts):
-            continue
-        if p.name in IGNORE_FILES:
-            continue
-        files.append(p)
-    return sorted(files)
+    return sorted(
+        p for p in root.rglob("*.py")
+        if not any(part in IGNORE_DIRS for part in p.parts)
+        and p.name not in IGNORE_FILES
+    )
 
 
-def analyze(project_root: Path) -> dict:
-    files = find_python_files(project_root)
-    if not files:
-        return {"error": "не найдено .py файлов"}
-
+# ==================================================================
+# AST-анализ
+# ==================================================================
+def analyze_ast(root: Path) -> dict:
+    files = find_files(root)
     parsed: dict[Path, dict] = {}
     for f in files:
         try:
             parsed[f] = parse_file(f)
         except SyntaxError as e:
-            return {
-                "error": f"синтаксическая ошибка в {f}: "
-                         f"строка {e.lineno}: {e.msg}",
-                "file": f,
-            }
+            return {"error": f"{f}:{e.lineno}: {e.msg}", "file": f}
 
-    project_defined: set[str] = set()
+    project_defined = set()
     for info in parsed.values():
         project_defined |= info["defined"]
 
-    # MISSING per file
     missing_by_file: dict[Path, set[str]] = {}
+    dups_by_file: dict[Path, dict[str, int]] = {}
     for f, info in parsed.items():
-        # Если в файле `from x import *`, не можем проверить MISSING.
-        if info["has_star_import"]:
+        if info["has_star"]:
             continue
-        candidates = (
-            info["used"]
-            - info["defined"]
-            - info["imported"]
-            - info["assigned"]
-            - info["params"]
-            - BUILTINS
-        )
-        if candidates:
-            missing_by_file[f] = candidates
+        miss = (info["used"] - info["defined"] - info["imported"]
+                - info["assigned"] - info["params"] - BUILTINS)
+        if miss:
+            missing_by_file[f] = miss
+        d = {n: c for n, c in info["defs_count"].items() if c > 1}
+        if d:
+            dups_by_file[f] = d
 
-    # DUPLICATES per file
-    duplicates_by_file: dict[Path, dict[str, int]] = {}
-    for f, info in parsed.items():
-        dups = {name: n for name, n in info["defs_count"].items() if n > 1}
-        if dups:
-            duplicates_by_file[f] = dups
-
-    # UNUSED globally
-    all_used: set[str] = set()
-    all_class_methods: set[str] = set()
+    all_used, all_methods = set(), set()
     for info in parsed.values():
         all_used |= info["used"]
-        all_class_methods |= info["class_methods"]
-    unused = sorted(project_defined - all_used - all_class_methods)
+        all_methods |= info["class_methods"]
+    unused = sorted(project_defined - all_used - all_methods)
 
     return {
         "files": files,
         "parsed": parsed,
-        "missing_by_file": missing_by_file,
-        "duplicates_by_file": duplicates_by_file,
+        "missing": missing_by_file,
+        "dups": dups_by_file,
         "unused": unused,
-        "project_defined": project_defined,
+        "defined": project_defined,
     }
+
+
+# ==================================================================
+# Импорт-проверка
+# ==================================================================
+def module_name_from_path(file_path: Path, project_root: Path) -> str | None:
+    try:
+        rel = file_path.relative_to(project_root)
+    except ValueError:
+        return None
+    parts = list(rel.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    if not parts:
+        return None
+    return ".".join(parts)
+
+
+def analyze_imports(root: Path, parsed: dict[Path, dict]) -> dict:
+    """Пробует импортировать каждый модуль. Пропускает app.py / файлы
+    с st.set_page_config на верхнем уровне."""
+    project_root = root if root.is_dir() else root.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    import_errors: dict[Path, str] = {}
+    skipped: list[Path] = []
+
+    for f, info in parsed.items():
+        if info.get("has_set_page_config"):
+            skipped.append(f)
+            continue
+
+        module_name = module_name_from_path(f, project_root)
+        if module_name is None:
+            skipped.append(f)
+            continue
+
+        try:
+            importlib.import_module(module_name)
+        except Exception as e:
+            import_errors[f] = f"{type(e).__name__}: {e}"
+
+    return {"import_errors": import_errors, "skipped": skipped}
 
 
 # ==================================================================
 # Отчёт
 # ==================================================================
-def print_report(result: dict) -> bool:
-    if "error" in result:
-        print(f"ОШИБКА: {result['error']}")
-        return True
-
+def print_report_ast(result: dict) -> bool:
     print(f"Файлов просканировано: {len(result['files'])}")
-    print(f"Функций/классов в проекте: {len(result['project_defined'])}")
+    print(f"Функций/классов в проекте: {len(result['defined'])}")
     print()
 
-    missing_by_file = result["missing_by_file"]
-    duplicates_by_file = result["duplicates_by_file"]
-
     print("MISSING (used, но не определено/импортировано/builtin):")
-    if not missing_by_file:
+    if not result["missing"]:
         print("   OK")
     else:
-        for f, names in sorted(missing_by_file.items()):
+        for f, names in sorted(result["missing"].items()):
             print(f"   {f}:")
             for n in sorted(names):
                 print(f"      {n}")
     print()
 
     print("DUPLICATES (более одного def в одном файле):")
-    if not duplicates_by_file:
+    if not result["dups"]:
         print("   OK")
     else:
-        for f, dups in sorted(duplicates_by_file.items()):
+        for f, d in sorted(result["dups"].items()):
             print(f"   {f}:")
-            for n, cnt in sorted(dups.items()):
+            for n, cnt in sorted(d.items()):
                 print(f"      {n} — {cnt} раз")
     print()
 
@@ -297,31 +316,37 @@ def print_report(result: dict) -> bool:
             print(f"   {n}")
     print()
 
-    has_problem = bool(missing_by_file or duplicates_by_file)
-    if has_problem:
-        print("ИТОГ: ❌ есть проблемы, приложение упадёт на вкладке")
-        print("      Исправьте MISSING/DUPLICATES до запуска Streamlit.")
+    return not (result["missing"] or result["dups"])
+
+
+def print_report_imports(result: dict) -> bool:
+    print("IMPORTS (реальный importlib):")
+    errs = result["import_errors"]
+    if not errs:
+        print("   OK")
     else:
-        print("ИТОГ: ✅ проблем не найдено")
-        if result["unused"]:
-            print(f"      {len(result['unused'])} функций ни разу "
-                  f"не использованы — проверьте вручную.")
-            print("      (Streamlit-колбэки передаются как объекты, "
-                  "а не вызываются,")
-            print("       поэтому некоторые попадают сюда ложно — "
-                  "это нормально.)")
-    return has_problem
+        for f, msg in sorted(errs.items()):
+            print(f"   {f}: {msg}")
+    if result["skipped"]:
+        print("   Пропущено (нужен streamlit runtime):")
+        for f in result["skipped"]:
+            print(f"      {f}")
+    print()
+    return not errs
 
 
 # ==================================================================
 # Точка входа
 # ==================================================================
 def main() -> int:
-    if len(sys.argv) > 1:
-        root = Path(sys.argv[1])
-    else:
-        root = Path(__file__).resolve().parent
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("path", nargs="?", default=None,
+                    help="Файл или папка (по умолчанию — корень проекта)")
+    ap.add_argument("--imports", action="store_true",
+                    help="Дополнительно пробовать import каждого модуля")
+    args = ap.parse_args()
 
+    root = Path(args.path) if args.path else Path(__file__).resolve().parent
     if not root.exists():
         print(f"Путь не найден: {root}")
         return 2
@@ -329,14 +354,23 @@ def main() -> int:
     print(f"Корень проекта: {root.resolve()}")
     print()
 
-    result = analyze(root)
-
+    result = analyze_ast(root)
     if "error" in result:
-        print_report(result)
+        print(f"ОШИБКА: {result['error']}")
         return 2
 
-    has_problem = print_report(result)
-    return 1 if has_problem else 0
+    ast_ok = print_report_ast(result)
+    imports_ok = True
+    if args.imports:
+        imp = analyze_imports(root, result["parsed"])
+        imports_ok = print_report_imports(imp)
+
+    ok = ast_ok and imports_ok
+    print("ИТОГ: " + ("✅ проблем не найдено" if ok else "❌ есть проблемы"))
+    if ok and result["unused"]:
+        print(f"      {len(result['unused'])} функций ни разу не использованы.")
+        print("      (Streamlit-колбэки сюда попадают ложно — это нормально.)")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
